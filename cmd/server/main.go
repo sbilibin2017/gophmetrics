@@ -3,16 +3,14 @@ package main
 import (
 	"context"
 	"log"
-
-	"github.com/sbilibin2017/gophmetrics/internal/apps"
 )
 
+// main is the entry point of the application. It parses command-line flags,
+// runs the application with the parsed configuration, and logs any fatal errors.
 func main() {
 	config := parseFlags()
 
-	app := apps.NewServer(config)
-
-	err := app.Run(context.Background())
+	err := run(context.Background(), config)
 	if err != nil {
 		log.Fatal(err)
 	}
