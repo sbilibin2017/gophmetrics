@@ -2,16 +2,38 @@ package main
 
 import (
 	"context"
+	"fmt"
 	"log"
+
+	"github.com/sbilibin2017/gophmetrics/internal/apps"
+	"github.com/sbilibin2017/gophmetrics/internal/configs/address"
+	"github.com/spf13/pflag"
 )
 
-// main is the entry point of the application. It parses command-line flags,
-// runs the application with the parsed configuration, and logs any fatal errors.
-func main() {
-	config := parseFlags()
+var addr string
 
-	err := run(context.Background(), config)
-	if err != nil {
+func init() {
+	pflag.StringVarP(&addr, "address", "a", ":8080", "server address to listen on")
+}
+
+func main() {
+	pflag.Parse()
+	if err := run(context.Background()); err != nil {
 		log.Fatal(err)
+	}
+}
+
+func run(ctx context.Context) error {
+	parsedAddr := address.New(addr)
+
+	switch parsedAddr.Scheme {
+	case address.SchemeHTTP:
+		return apps.RunMemoryHTTPServer(ctx, parsedAddr.Address)
+	case address.SchemeHTTPS:
+		return fmt.Errorf("https server not implemented yet: %s", parsedAddr.Address)
+	case address.SchemeGRPC:
+		return fmt.Errorf("gRPC server not implemented yet: %s", parsedAddr.Address)
+	default:
+		return address.ErrUnsupportedScheme
 	}
 }
