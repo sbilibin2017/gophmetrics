@@ -124,6 +124,11 @@ func NewMetricGetPathHandler(getter Getter) http.HandlerFunc {
 			return
 		}
 
+		if metric == nil {
+			http.Error(w, "metric not found", http.StatusNotFound)
+			return
+		}
+
 		switch metric.MType {
 		case models.Gauge:
 			if metric.Value == nil {
@@ -165,22 +170,29 @@ func NewMetricListHTMLHandler(lister Lister) http.HandlerFunc {
 			return
 		}
 
-		w.Header().Set("Content-Type", "text/html; charset=utf-8")
-		w.Write([]byte("<html><body><h1>Metrics List</h1><table border='1'><tr><th>ID</th><th>Type</th><th>Value</th><th>Delta</th></tr>"))
+		var sb strings.Builder
+
+		sb.WriteString("<html><body><h1>Metrics List</h1>")
+		sb.WriteString("<table border='1'><tr><th>Name</th><th>Value</th></tr>")
 
 		for _, m := range metrics {
 			val := ""
 			if m.Value != nil {
 				val = strconv.FormatFloat(*m.Value, 'f', -1, 64)
+			} else if m.Delta != nil {
+				val = strconv.FormatInt(*m.Delta, 10)
 			}
-			delta := ""
-			if m.Delta != nil {
-				delta = strconv.FormatInt(*m.Delta, 10)
-			}
-			row := "<tr><td>" + m.ID + "</td><td>" + m.MType + "</td><td>" + val + "</td><td>" + delta + "</td></tr>"
-			w.Write([]byte(row))
+
+			sb.WriteString("<tr><td>")
+			sb.WriteString(m.ID)
+			sb.WriteString("</td><td>")
+			sb.WriteString(val)
+			sb.WriteString("</td></tr>")
 		}
 
-		w.Write([]byte("</table></body></html>"))
+		sb.WriteString("</table></body></html>")
+
+		w.Header().Set("Content-Type", "text/html; charset=utf-8")
+		w.Write([]byte(sb.String()))
 	}
 }

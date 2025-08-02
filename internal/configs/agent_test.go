@@ -6,83 +6,89 @@ import (
 	"github.com/stretchr/testify/assert"
 )
 
-func TestNewAgentConfig_Defaults(t *testing.T) {
-	cfg := NewAgentConfig()
-
-	assert.Equal(t, "http://localhost:8080", cfg.Address)
-	assert.Equal(t, 2, cfg.PollInterval)
-	assert.Equal(t, 10, cfg.ReportInterval)
-}
-
-func TestWithAddress(t *testing.T) {
+func TestNewAgentConfig(t *testing.T) {
 	tests := []struct {
-		name     string
-		opts     []string
-		expected string
+		name            string
+		opts            []AgentOpt
+		expectedAddress string
+		expectedPoll    int
+		expectedReport  int
 	}{
-		{"No address", []string{}, "http://localhost:8080"},
-		{"Empty address", []string{""}, "http://localhost:8080"},
-		{"One address", []string{"http://example.com"}, "http://example.com"},
-		{"Multiple addresses", []string{"", "http://first.com", "http://second.com"}, "http://first.com"},
+		{
+			name:            "no options - use defaults",
+			opts:            nil,
+			expectedAddress: "http://localhost:8080",
+			expectedPoll:    2,
+			expectedReport:  10,
+		},
+		{
+			name: "custom address only",
+			opts: []AgentOpt{
+				WithAgentServerAddress("http://custom:9090"),
+			},
+			expectedAddress: "http://custom:9090",
+			expectedPoll:    2,
+			expectedReport:  10,
+		},
+		{
+			name: "custom poll interval only",
+			opts: []AgentOpt{
+				WithAgentPollInterval(5),
+			},
+			expectedAddress: "http://localhost:8080",
+			expectedPoll:    5,
+			expectedReport:  10,
+		},
+		{
+			name: "custom report interval only",
+			opts: []AgentOpt{
+				WithAgentReportInterval(20),
+			},
+			expectedAddress: "http://localhost:8080",
+			expectedPoll:    2,
+			expectedReport:  20,
+		},
+		{
+			name: "all custom values",
+			opts: []AgentOpt{
+				WithAgentServerAddress("http://api:7070"),
+				WithAgentPollInterval(3),
+				WithAgentReportInterval(30),
+			},
+			expectedAddress: "http://api:7070",
+			expectedPoll:    3,
+			expectedReport:  30,
+		},
+		{
+			name: "invalid values are ignored",
+			opts: []AgentOpt{
+				WithAgentServerAddress(""), // empty
+				WithAgentPollInterval(0),   // not positive
+				WithAgentReportInterval(-1),
+			},
+			expectedAddress: "http://localhost:8080",
+			expectedPoll:    2,
+			expectedReport:  10,
+		},
+		{
+			name: "first valid wins",
+			opts: []AgentOpt{
+				WithAgentServerAddress("", "", "http://valid:8080"),
+				WithAgentPollInterval(0, 6),
+				WithAgentReportInterval(-3, 25),
+			},
+			expectedAddress: "http://valid:8080",
+			expectedPoll:    6,
+			expectedReport:  25,
+		},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			cfg := NewAgentConfig(WithAddress(tt.opts...))
-			assert.Equal(t, tt.expected, cfg.Address)
+			cfg := NewAgentConfig(tt.opts...)
+			assert.Equal(t, tt.expectedAddress, cfg.Address)
+			assert.Equal(t, tt.expectedPoll, cfg.PollInterval)
+			assert.Equal(t, tt.expectedReport, cfg.ReportInterval)
 		})
 	}
-}
-
-func TestWithAgentPollInterval(t *testing.T) {
-	tests := []struct {
-		name     string
-		opts     []int
-		expected int
-	}{
-		{"No interval", []int{}, 2},
-		{"Zero interval", []int{0}, 2},
-		{"Negative interval", []int{-1}, 2},
-		{"One positive interval", []int{5}, 5},
-		{"Multiple intervals", []int{0, 3, 10}, 3},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			cfg := NewAgentConfig(WithAgentPollInterval(tt.opts...))
-			assert.Equal(t, tt.expected, cfg.PollInterval)
-		})
-	}
-}
-
-func TestWithAgentReportInterval(t *testing.T) {
-	tests := []struct {
-		name     string
-		opts     []int
-		expected int
-	}{
-		{"No interval", []int{}, 10},
-		{"Zero interval", []int{0}, 10},
-		{"Negative interval", []int{-5}, 10},
-		{"One positive interval", []int{15}, 15},
-		{"Multiple intervals", []int{0, 20, 30}, 20},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			cfg := NewAgentConfig(WithAgentReportInterval(tt.opts...))
-			assert.Equal(t, tt.expected, cfg.ReportInterval)
-		})
-	}
-}
-
-func TestNewAgentConfig_CombinedOpts(t *testing.T) {
-	cfg := NewAgentConfig(
-		WithAddress("http://combined.com"),
-		WithAgentPollInterval(7),
-		WithAgentReportInterval(25),
-	)
-	assert.Equal(t, "http://combined.com", cfg.Address)
-	assert.Equal(t, 7, cfg.PollInterval)
-	assert.Equal(t, 25, cfg.ReportInterval)
 }

@@ -19,6 +19,35 @@ func int64Ptr(v int64) *int64 {
 	return &v
 }
 
+func TestNewMetricAgent(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	defer ctrl.Finish()
+
+	mockUpdater := NewMockUpdater(ctrl)
+
+	pollTicker := time.NewTicker(10 * time.Millisecond)
+	reportTicker := time.NewTicker(20 * time.Millisecond)
+	defer pollTicker.Stop()
+	defer reportTicker.Stop()
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	mockUpdater.EXPECT().Update(gomock.Any(), gomock.Any()).AnyTimes()
+
+	// Create the agent function
+	agentFunc := NewMetricAgent(mockUpdater, pollTicker, reportTicker)
+
+	// Run the agent in a goroutine and stop it after a short duration
+	go func() {
+		time.Sleep(50 * time.Millisecond)
+		cancel()
+	}()
+
+	err := agentFunc(ctx)
+	assert.True(t, err == nil || err == context.Canceled, "expected nil or context.Canceled, got: %v", err)
+}
+
 // TestStartMetricAgent ensures startMetricAgent runs and exits gracefully
 func TestStartMetricAgent(t *testing.T) {
 	ctrl := gomock.NewController(t)

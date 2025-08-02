@@ -8,20 +8,18 @@ import (
 
 // Opt defines a function type that configures a *resty.Client and may return an error.
 // It is used for modular configuration of the client.
-type Opt func(*resty.Client) error
+type Opt func(*resty.Client)
 
 // New creates and returns a new instance of resty.Client with the given base URL and options.
 // Options are passed as a slice of Opt functions for flexible client configuration.
-func New(baseURL string, opts ...Opt) (*resty.Client, error) {
+func New(baseURL string, opts ...Opt) *resty.Client {
 	client := resty.New().SetBaseURL(baseURL)
 
 	for _, opt := range opts {
-		if err := opt(client); err != nil {
-			return nil, err
-		}
+		opt(client)
 	}
 
-	return client, nil
+	return client
 }
 
 // RetryPolicy describes the parameters for HTTP request retry logic.
@@ -35,7 +33,7 @@ type RetryPolicy struct {
 // A policy is considered valid if at least one of its fields is greater than zero.
 // If no valid policies are found, the client remains unchanged.
 func WithRetryPolicy(policies ...RetryPolicy) Opt {
-	return func(c *resty.Client) error {
+	return func(c *resty.Client) {
 		for _, policy := range policies {
 			if policy.Count > 0 || policy.Wait > 0 || policy.MaxWait > 0 {
 				if policy.Count > 0 {
@@ -50,6 +48,5 @@ func WithRetryPolicy(policies ...RetryPolicy) Opt {
 				break
 			}
 		}
-		return nil
 	}
 }

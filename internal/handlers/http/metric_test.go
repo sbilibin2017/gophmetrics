@@ -211,6 +211,18 @@ func TestNewMetricGetPathHandler(t *testing.T) {
 			},
 			wantStatus: http.StatusNotFound,
 		},
+		{
+			name:  "getter returns nil metric",
+			mType: models.Gauge,
+			id:    "metricNil",
+			setupMock: func() {
+				mockGetter.EXPECT().
+					Get(gomock.Any(), &models.MetricID{ID: "metricNil", MType: models.Gauge}).
+					Return(nil, nil)
+			},
+			wantStatus: http.StatusNotFound,
+			wantBody:   "metric not found\n",
+		},
 	}
 
 	for _, tt := range tests {
@@ -278,10 +290,8 @@ func TestNewMetricListHTMLHandler(t *testing.T) {
 			expectContains: []string{
 				"<h1>Metrics List</h1>",
 				"<td>metric1</td>",
-				"<td>gauge</td>",
 				"123.45",
 				"<td>metric2</td>",
-				"<td>counter</td>",
 				"42",
 			},
 		},
@@ -310,4 +320,108 @@ func TestNewMetricListHTMLHandler(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestNewMetricGetPathHandler_CounterCases(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	defer ctrl.Finish()
+
+	mockGetter := NewMockGetter(ctrl)
+	handler := NewMetricGetPathHandler(mockGetter)
+
+	t.Run("valid counter metric", func(t *testing.T) {
+		deltaVal := int64(100)
+		metric := &models.Metrics{
+			ID:    "counterMetric",
+			MType: models.Counter,
+			Delta: &deltaVal,
+		}
+
+		mockGetter.EXPECT().
+			Get(gomock.Any(), &models.MetricID{ID: "counterMetric", MType: models.Counter}).
+			Return(metric, nil)
+
+		req := httptest.NewRequest(http.MethodGet, "/value/counter/counterMetric", nil)
+		rw := httptest.NewRecorder()
+		rctx := chi.NewRouteContext()
+		rctx.URLParams.Add("type", models.Counter)
+		rctx.URLParams.Add("id", "counterMetric")
+		req = req.WithContext(context.WithValue(req.Context(), chi.RouteCtxKey, rctx))
+
+		handler.ServeHTTP(rw, req)
+
+		assert.Equal(t, http.StatusOK, rw.Code)
+		assert.Equal(t, "text/plain", rw.Header().Get("Content-Type"))
+		assert.Equal(t, "100", rw.Body.String())
+	})
+
+	t.Run("counter metric with nil Delta", func(t *testing.T) {
+		metric := &models.Metrics{
+			ID:    "nilDeltaMetric",
+			MType: models.Counter,
+			Delta: nil, // missing Delta triggers 404
+		}
+
+		mockGetter.EXPECT().
+			Get(gomock.Any(), &models.MetricID{ID: "nilDeltaMetric", MType: models.Counter}).
+			Return(metric, nil)
+
+		req := httptest.NewRequest(http.MethodGet, "/value/counter/nilDeltaMetric", nil)
+		rw := httptest.NewRecorder()
+		rctx := chi.NewRouteContext()
+		rctx.URLParams.Add("type", models.Counter)
+		rctx.URLParams.Add("id", "nilDeltaMetric")
+		req = req.WithContext(context.WithValue(req.Context(), chi.RouteCtxKey, rctx))
+
+		handler.ServeHTTP(rw, req)
+
+		assert.Equal(t, http.StatusNotFound, rw.Code)
+	})
+
+	t.Run("unknown metric type triggers bad request", func(t *testing.T) {
+		req := httptest.NewRequest(http.MethodGet, "/value/unknownType/metricX", nil)
+		rw := httptest.NewRecorder()
+		rctx := chi.NewRouteContext()
+		rctx.URLParams.Add("type", "unknownType")
+		rctx.URLParams.Add("id", "metricX")
+		req = req.WithContext(context.WithValue(req.Context(), chi.RouteCtxKey, rctx))
+
+		handler.ServeHTTP(rw, req)
+
+		assert.Equal(t, http.StatusBadRequest, rw.Code)
+	})
+}
+
+func TestNewMetricGetPathHandler_DefaultSwitchCase(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	defer ctrl.Finish()
+
+	mockGetter := NewMockGetter(ctrl)
+	handler := NewMetricGetPathHandler(mockGetter)
+
+	t.Run("metric with unknown MType in getter response triggers bad request", func(t *testing.T) {
+		// Prepare a metric with an invalid type that triggers the default case
+		metric := &models.Metrics{
+			ID:    "metricX",
+			MType: "unknownType", // Not models.Gauge or models.Counter
+		}
+
+		// Expect getter.Get call with any context and any MetricID param
+		mockGetter.EXPECT().
+			Get(gomock.Any(), gomock.AssignableToTypeOf(&models.MetricID{})).
+			Return(metric, nil)
+
+		req := httptest.NewRequest(http.MethodGet, "/value/gauge/metricX", nil)
+		rw := httptest.NewRecorder()
+
+		// chi URL params setup
+		rctx := chi.NewRouteContext()
+		rctx.URLParams.Add("type", "gauge") // valid type for URL param validation
+		rctx.URLParams.Add("id", "metricX")
+		req = req.WithContext(context.WithValue(req.Context(), chi.RouteCtxKey, rctx))
+
+		handler.ServeHTTP(rw, req)
+
+		assert.Equal(t, http.StatusBadRequest, rw.Code)
+	})
 }
