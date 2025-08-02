@@ -27,9 +27,9 @@ func NewAgentConfig(opts ...AgentOpt) *AgentConfig {
 	return cfg
 }
 
-// WithAddress returns an AgentOpt that sets the Address field in AgentConfig,
+// WithAgentServerAddress returns an AgentOpt that sets the Address field in AgentConfig,
 // using the first non-empty string in opts if any.
-func WithAddress(opts ...string) AgentOpt {
+func WithAgentServerAddress(opts ...string) AgentOpt {
 	return func(cfg *AgentConfig) {
 		for _, addr := range opts {
 			if addr != "" {

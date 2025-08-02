@@ -1,7 +1,6 @@
 package http
 
 import (
-	"errors"
 	"testing"
 	"time"
 
@@ -14,7 +13,6 @@ func TestNew(t *testing.T) {
 		name       string
 		baseURL    string
 		opts       []Opt
-		expectErr  bool
 		expectURL  string
 		expectOpts func(client *resty.Client)
 	}{
@@ -22,10 +20,8 @@ func TestNew(t *testing.T) {
 			name:      "sets base URL without options",
 			baseURL:   "http://example.com",
 			opts:      nil,
-			expectErr: false,
 			expectURL: "http://example.com",
 			expectOpts: func(client *resty.Client) {
-				// No extra config, just defaults
 				assert.Equal(t, 0, client.RetryCount)
 			},
 		},
@@ -39,7 +35,6 @@ func TestNew(t *testing.T) {
 					MaxWait: 50 * time.Millisecond,
 				}),
 			},
-			expectErr: false,
 			expectURL: "https://api.test",
 			expectOpts: func(client *resty.Client) {
 				assert.Equal(t, 2, client.RetryCount)
@@ -47,29 +42,14 @@ func TestNew(t *testing.T) {
 				assert.Equal(t, 50*time.Millisecond, client.RetryMaxWaitTime)
 			},
 		},
-		{
-			name:    "option returns error",
-			baseURL: "http://error.com",
-			opts: []Opt{
-				func(c *resty.Client) error {
-					return errors.New("option error")
-				},
-			},
-			expectErr: true,
-		},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			client, err := New(tt.baseURL, tt.opts...)
-			if tt.expectErr {
-				assert.Error(t, err)
-				assert.Nil(t, client)
-				return
-			}
-			assert.NoError(t, err)
+			client := New(tt.baseURL, tt.opts...)
 			assert.NotNil(t, client)
 			assert.Equal(t, tt.expectURL, client.BaseURL)
+
 			if tt.expectOpts != nil {
 				tt.expectOpts(client)
 			}
@@ -120,8 +100,8 @@ func TestWithRetryPolicy(t *testing.T) {
 				maxWait time.Duration
 			}{
 				count:   0,
-				wait:    100 * time.Millisecond, // Resty default
-				maxWait: 2 * time.Second,        // Resty default
+				wait:    100 * time.Millisecond, // default
+				maxWait: 2 * time.Second,        // default
 			},
 		},
 	}
@@ -131,8 +111,7 @@ func TestWithRetryPolicy(t *testing.T) {
 			client := resty.New()
 
 			opt := WithRetryPolicy(tt.policies...)
-			err := opt(client)
-			assert.NoError(t, err)
+			opt(client)
 
 			assert.Equal(t, tt.expect.count, client.RetryCount)
 			assert.Equal(t, tt.expect.wait, client.RetryWaitTime)

@@ -15,14 +15,11 @@ func RunMetricAgentHTTP(
 	ctx context.Context,
 	config *configs.AgentConfig,
 ) error {
-	client, err := http.New(config.Address, http.WithRetryPolicy(http.RetryPolicy{
+	client := http.New(config.Address, http.WithRetryPolicy(http.RetryPolicy{
 		Count:   3,
 		Wait:    time.Second,
 		MaxWait: 5 * time.Second,
 	}))
-	if err != nil {
-		return err
-	}
 
 	updater := facades.NewMetricHTTPFacade(client)
 
