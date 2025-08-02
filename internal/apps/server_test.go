@@ -6,6 +6,8 @@ import (
 	"net/http"
 	"testing"
 	"time"
+
+	"github.com/sbilibin2017/gophmetrics/internal/configs"
 )
 
 func getFreePort(t *testing.T) string {
@@ -23,9 +25,13 @@ func TestRunMemoryHTTPServer(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
+	config := &configs.ServerConfig{
+		Address: addr,
+	}
+
 	// Run server in background
 	go func() {
-		err := RunMemoryHTTPServer(ctx, addr)
+		err := RunMemoryHTTPServer(ctx, config)
 		if err != nil {
 			t.Errorf("server error: %v", err)
 		}
@@ -65,8 +71,12 @@ func TestRunMemoryHTTPServer_Error(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 500*time.Millisecond)
 	defer cancel()
 
+	config := &configs.ServerConfig{
+		Address: addr,
+	}
+
 	// Now try to run the server on the same port, expect error
-	err = RunMemoryHTTPServer(ctx, addr)
+	err = RunMemoryHTTPServer(ctx, config)
 	if err == nil {
 		t.Fatal("expected error when starting server on used port, got nil")
 	}

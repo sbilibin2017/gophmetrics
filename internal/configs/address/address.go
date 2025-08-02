@@ -43,3 +43,8 @@ func New(input string) Address {
 		Address: addr,
 	}
 }
+
+// String implements the fmt.Stringer interface, returning the full address.
+func (a Address) String() string {
+	return a.Scheme + "://" + a.Address
+}

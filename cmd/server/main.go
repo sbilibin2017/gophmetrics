@@ -6,6 +6,7 @@ import (
 	"log"
 
 	"github.com/sbilibin2017/gophmetrics/internal/apps"
+	"github.com/sbilibin2017/gophmetrics/internal/configs"
 	"github.com/sbilibin2017/gophmetrics/internal/configs/address"
 	"github.com/spf13/pflag"
 )
@@ -26,9 +27,12 @@ func main() {
 func run(ctx context.Context) error {
 	parsedAddr := address.New(addr)
 
+	// Create ServerConfig with functional options
+	cfg := configs.NewServerConfig(configs.WithServerAddress(parsedAddr.Address))
+
 	switch parsedAddr.Scheme {
 	case address.SchemeHTTP:
-		return apps.RunMemoryHTTPServer(ctx, parsedAddr.Address)
+		return apps.RunMemoryHTTPServer(ctx, cfg)
 	case address.SchemeHTTPS:
 		return fmt.Errorf("https server not implemented yet: %s", parsedAddr.Address)
 	case address.SchemeGRPC:

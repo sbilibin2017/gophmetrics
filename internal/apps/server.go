@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/go-chi/chi/v5"
+	"github.com/sbilibin2017/gophmetrics/internal/configs"
 	httpHandlers "github.com/sbilibin2017/gophmetrics/internal/handlers/http"
 	"github.com/sbilibin2017/gophmetrics/internal/models"
 	"github.com/sbilibin2017/gophmetrics/internal/repositories/memory"
@@ -17,7 +18,10 @@ import (
 )
 
 // RunMemoryHTTPServer starts an HTTP server with metric endpoints and handles graceful shutdown.
-func RunMemoryHTTPServer(ctx context.Context, addr string) error {
+func RunMemoryHTTPServer(
+	ctx context.Context,
+	config *configs.ServerConfig,
+) error {
 	// In-memory metric storage
 	data := make(map[models.MetricID]models.Metrics)
 	writer := memory.NewMetricWriteRepository(data)
@@ -39,7 +43,7 @@ func RunMemoryHTTPServer(ctx context.Context, addr string) error {
 	r.Get("/", listHandler)
 
 	srv := &http.Server{
-		Addr:    addr,
+		Addr:    config.Address, // use config.Address here
 		Handler: r,
 	}
 
