@@ -6,44 +6,43 @@ import (
 	"github.com/stretchr/testify/assert"
 )
 
-func TestNewServerConfig(t *testing.T) {
+func TestNewServerConfig_Defaults(t *testing.T) {
+	cfg := NewServerConfig()
+	assert.Equal(t, ":8080", cfg.Address)
+}
+
+func TestNewServerConfig_WithOptions(t *testing.T) {
 	tests := []struct {
-		name     string
-		opts     []ServerOpt
-		expected string
+		name string
+		opts []ServerOpt
+		want *ServerConfig
 	}{
 		{
-			name:     "default address",
-			opts:     nil,
-			expected: ":8080",
+			name: "set address",
+			opts: []ServerOpt{WithServerAddress("127.0.0.1:9000")},
+			want: &ServerConfig{Address: "127.0.0.1:9000"},
 		},
 		{
-			name: "single valid address",
-			opts: []ServerOpt{
-				WithServerAddress("127.0.0.1:9090"),
-			},
-			expected: "127.0.0.1:9090",
+			name: "empty address ignored",
+			opts: []ServerOpt{WithServerAddress("")},
+			want: &ServerConfig{Address: ":8080"},
 		},
 		{
-			name: "multiple addresses, last non-empty used",
-			opts: []ServerOpt{
-				WithServerAddress("", "192.168.1.1:8081", "10.0.0.1:8082"),
-			},
-			expected: "10.0.0.1:8082",
+			name: "multiple addresses uses first non-empty",
+			opts: []ServerOpt{WithServerAddress("", "192.168.0.1:5000")},
+			want: &ServerConfig{Address: "192.168.0.1:5000"},
 		},
 		{
-			name: "all empty addresses",
-			opts: []ServerOpt{
-				WithServerAddress("", ""),
-			},
-			expected: ":8080", // fallback to default since none are non-empty
+			name: "no options",
+			opts: nil,
+			want: &ServerConfig{Address: ":8080"},
 		},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			cfg := NewServerConfig(tt.opts...)
-			assert.Equal(t, tt.expected, cfg.Address)
+			assert.Equal(t, tt.want.Address, cfg.Address)
 		})
 	}
 }

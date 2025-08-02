@@ -2,18 +2,42 @@ package main
 
 import (
 	"context"
+	"fmt"
 	"log"
 
 	"github.com/sbilibin2017/gophmetrics/internal/apps"
+	"github.com/sbilibin2017/gophmetrics/internal/configs"
+	"github.com/sbilibin2017/gophmetrics/internal/configs/address"
+	"github.com/spf13/pflag"
 )
 
+var addr string
+
+func init() {
+	pflag.StringVarP(&addr, "address", "a", ":8080", "server address to listen on")
+}
+
 func main() {
-	config := parseFlags()
-
-	app := apps.NewServer(config)
-
-	err := app.Run(context.Background())
-	if err != nil {
+	pflag.Parse()
+	if err := run(context.Background()); err != nil {
 		log.Fatal(err)
+	}
+}
+
+func run(ctx context.Context) error {
+	parsedAddr := address.New(addr)
+
+	// Create ServerConfig with functional options
+	cfg := configs.NewServerConfig(configs.WithServerAddress(parsedAddr.Address))
+
+	switch parsedAddr.Scheme {
+	case address.SchemeHTTP:
+		return apps.RunMemoryHTTPServer(ctx, cfg)
+	case address.SchemeHTTPS:
+		return fmt.Errorf("https server not implemented yet: %s", parsedAddr.Address)
+	case address.SchemeGRPC:
+		return fmt.Errorf("gRPC server not implemented yet: %s", parsedAddr.Address)
+	default:
+		return address.ErrUnsupportedScheme
 	}
 }
