@@ -7,9 +7,12 @@ import (
 	"log"
 	"os"
 	"strconv"
+	"time"
 
-	"github.com/sbilibin2017/gophmetrics/internal/apps"
+	"github.com/sbilibin2017/gophmetrics/internal/agent"
 	"github.com/sbilibin2017/gophmetrics/internal/configs/address"
+	"github.com/sbilibin2017/gophmetrics/internal/configs/transport/http"
+	"github.com/sbilibin2017/gophmetrics/internal/facades"
 	"github.com/spf13/pflag"
 )
 
@@ -63,9 +66,25 @@ func parseFlags() error {
 
 func run(ctx context.Context) error {
 	parsedAddr := address.New(addr)
+
 	switch parsedAddr.Scheme {
 	case address.SchemeHTTP:
-		return apps.RunMetricAgentHTTP(ctx, parsedAddr.String(), pollInterval, reportInterval)
+		client := http.New(parsedAddr.String(), http.WithRetryPolicy(http.RetryPolicy{
+			Count:   3,
+			Wait:    time.Second,
+			MaxWait: 5 * time.Second,
+		}))
+
+		updater := facades.NewMetricHTTPFacade(client)
+
+		pollTicker := time.NewTicker(time.Duration(pollInterval) * time.Second)
+		defer pollTicker.Stop()
+
+		reportTicker := time.NewTicker(time.Duration(reportInterval) * time.Second)
+		defer reportTicker.Stop()
+
+		return agent.RunMetricAgent(ctx, updater, pollTicker, reportTicker)
+
 	case address.SchemeHTTPS:
 		return fmt.Errorf("https agent not implemented yet: %s", parsedAddr.Address)
 	case address.SchemeGRPC:
