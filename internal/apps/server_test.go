@@ -6,8 +6,6 @@ import (
 	"net/http"
 	"testing"
 	"time"
-
-	"github.com/sbilibin2017/gophmetrics/internal/configs"
 )
 
 func getFreePort(t *testing.T) string {
@@ -25,22 +23,18 @@ func TestRunMemoryHTTPServer(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
-	config := &configs.ServerConfig{
-		Address: addr,
-	}
-
 	// Run server in background
 	go func() {
-		err := RunMemoryHTTPServer(ctx, config)
+		err := RunMemoryHTTPServer(ctx, addr)
 		if err != nil {
 			t.Errorf("server error: %v", err)
 		}
 	}()
 
-	// Wait a bit for the server to start
+	// Wait for server to start
 	time.Sleep(200 * time.Millisecond)
 
-	// Make a request to the server
+	// Make a GET request to "/"
 	resp, err := http.Get("http://" + addr + "/")
 	if err != nil {
 		t.Fatalf("failed to GET /: %v", err)
@@ -51,32 +45,28 @@ func TestRunMemoryHTTPServer(t *testing.T) {
 		t.Errorf("expected status 200, got %d", resp.StatusCode)
 	}
 
-	// Cancel context to shut down server gracefully
+	// Cancel context to trigger graceful shutdown
 	cancel()
 
-	// Wait for shutdown (optional)
+	// Give server time to shutdown
 	time.Sleep(100 * time.Millisecond)
 }
 
 func TestRunMemoryHTTPServer_Error(t *testing.T) {
-	// Open a dummy listener to occupy a free port
+	// Occupy a port to cause conflict
 	ln, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {
 		t.Fatalf("failed to listen on port: %v", err)
 	}
 	defer ln.Close()
 
-	addr := ln.Addr().String() // This port is now in use
+	addr := ln.Addr().String()
 
 	ctx, cancel := context.WithTimeout(context.Background(), 500*time.Millisecond)
 	defer cancel()
 
-	config := &configs.ServerConfig{
-		Address: addr,
-	}
-
-	// Now try to run the server on the same port, expect error
-	err = RunMemoryHTTPServer(ctx, config)
+	// Attempt to start server on the occupied port; expect error
+	err = RunMemoryHTTPServer(ctx, addr)
 	if err == nil {
 		t.Fatal("expected error when starting server on used port, got nil")
 	}

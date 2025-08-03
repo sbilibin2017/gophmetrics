@@ -8,8 +8,6 @@ import (
 	"sync/atomic"
 	"testing"
 	"time"
-
-	"github.com/sbilibin2017/gophmetrics/internal/configs"
 )
 
 func TestRunMetricAgentHTTP(t *testing.T) {
@@ -25,23 +23,17 @@ func TestRunMetricAgentHTTP(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
 	defer cancel()
 
-	// Construct AgentConfig with test server URL and intervals
-	config := &configs.AgentConfig{
-		Address:        server.URL,
-		PollInterval:   1,
-		ReportInterval: 1,
-	}
-
 	errCh := make(chan error, 1)
 	go func() {
-		errCh <- RunMetricAgentHTTP(ctx, config)
+		errCh <- RunMetricAgentHTTP(ctx, server.URL, 1, 1)
 	}()
 
 	select {
 	case err := <-errCh:
 		if err != nil {
 			// Accept errors wrapping context deadline or cancellation as expected shutdown
-			if !(strings.Contains(err.Error(), "context deadline exceeded") || strings.Contains(err.Error(), "context canceled")) {
+			if !strings.Contains(err.Error(), "context deadline exceeded") &&
+				!strings.Contains(err.Error(), "context canceled") {
 				t.Fatalf("RunMetricAgentHTTP returned unexpected error: %v", err)
 			}
 		}

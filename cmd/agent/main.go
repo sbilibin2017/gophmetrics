@@ -2,14 +2,27 @@ package main
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log"
+	"os"
+	"strconv"
 
 	"github.com/sbilibin2017/gophmetrics/internal/apps"
-	"github.com/sbilibin2017/gophmetrics/internal/configs"
 	"github.com/sbilibin2017/gophmetrics/internal/configs/address"
 	"github.com/spf13/pflag"
 )
+
+func main() {
+	err := parseFlags()
+	if err != nil {
+		log.Fatal(err)
+	}
+
+	if err := run(context.Background()); err != nil {
+		log.Fatal(err)
+	}
+}
 
 var (
 	addr           string
@@ -23,30 +36,36 @@ func init() {
 	pflag.IntVarP(&reportInterval, "report-interval", "r", 10, "report interval in seconds")
 }
 
-func main() {
+func parseFlags() error {
 	pflag.Parse()
-
 	if len(pflag.Args()) > 0 {
-		log.Fatalf("unknown flags or arguments: %v", pflag.Args())
+		return errors.New("unknown flags are provided")
 	}
-
-	if err := run(context.Background()); err != nil {
-		log.Fatal(err)
+	if envAddr := os.Getenv("ADDRESS"); envAddr != "" {
+		addr = envAddr
 	}
+	if envPoll := os.Getenv("POLL_INTERVAL"); envPoll != "" {
+		val, err := strconv.Atoi(envPoll)
+		if err != nil {
+			return errors.New("invalid POLL_INTERVAL: must be an integer")
+		}
+		pollInterval = val
+	}
+	if envReport := os.Getenv("REPORT_INTERVAL"); envReport != "" {
+		val, err := strconv.Atoi(envReport)
+		if err != nil {
+			return errors.New("invalid REPORT_INTERVAL: must be an integer")
+		}
+		reportInterval = val
+	}
+	return nil
 }
 
 func run(ctx context.Context) error {
 	parsedAddr := address.New(addr)
-
-	config := configs.NewAgentConfig(
-		configs.WithAgentServerAddress(parsedAddr.String()),
-		configs.WithAgentPollInterval(pollInterval),
-		configs.WithAgentReportInterval(reportInterval),
-	)
-
 	switch parsedAddr.Scheme {
 	case address.SchemeHTTP:
-		return apps.RunMetricAgentHTTP(ctx, config)
+		return apps.RunMetricAgentHTTP(ctx, parsedAddr.String(), pollInterval, reportInterval)
 	case address.SchemeHTTPS:
 		return fmt.Errorf("https agent not implemented yet: %s", parsedAddr.Address)
 	case address.SchemeGRPC:
