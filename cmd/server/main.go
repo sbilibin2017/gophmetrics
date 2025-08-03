@@ -1,6 +1,3 @@
-// Package main is the entry point for the metrics server application.
-// It parses command line flags to configure the server address
-// and runs the appropriate server based on the address scheme.
 package main
 
 import (
@@ -14,26 +11,26 @@ import (
 	"github.com/spf13/pflag"
 )
 
-// main runs the server and logs any fatal errors.
+var (
+	addr string
+)
+
+func init() {
+	pflag.StringVarP(&addr, "address", "a", "http://localhost:8080", "metrics server URL")
+}
+
 func main() {
+	pflag.Parse()
+
+	if len(pflag.Args()) > 0 {
+		log.Fatalf("unknown flags or arguments: %v", pflag.Args())
+	}
+
 	if err := run(context.Background()); err != nil {
 		log.Fatal(err)
 	}
 }
 
-var (
-	// addr is the server address specified by the user via CLI flags.
-	addr string
-)
-
-func init() {
-	// init sets up command line flags.
-	pflag.StringVarP(&addr, "address", "a", "http://localhost:8080", "metrics server URL")
-}
-
-// run parses the server address, builds the server config, and starts the appropriate server.
-//
-// Returns an error if the scheme is unsupported or the server fails to start.
 func run(ctx context.Context) error {
 	parsedAddr := address.New(addr)
 

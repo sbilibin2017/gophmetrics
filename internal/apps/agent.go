@@ -10,6 +10,9 @@ import (
 	"github.com/sbilibin2017/gophmetrics/internal/facades"
 )
 
+type MetricAgentApp struct {
+}
+
 // RunMetricAgentHTTP runs the metric agent that collects and sends metrics over HTTP.
 func RunMetricAgentHTTP(
 	ctx context.Context,
@@ -29,7 +32,5 @@ func RunMetricAgentHTTP(
 	reportTicker := time.NewTicker(time.Duration(config.ReportInterval) * time.Second)
 	defer reportTicker.Stop()
 
-	metricAgent := agent.NewMetricAgent(updater, pollTicker, reportTicker)
-
-	return metricAgent(ctx)
+	return agent.RunMetricAgent(ctx, updater, pollTicker, reportTicker)
 }
