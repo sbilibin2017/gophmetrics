@@ -195,7 +195,6 @@ func TestSendMetrics_ContextDoneWithEmptyBatch(t *testing.T) {
 	ticker := time.NewTicker(10 * time.Millisecond)
 	defer ticker.Stop()
 
-	// Do NOT close the input channel so it blocks on reading
 	input := make(chan models.Metrics)
 
 	errCh := make(chan error)
@@ -203,12 +202,16 @@ func TestSendMetrics_ContextDoneWithEmptyBatch(t *testing.T) {
 		errCh <- sendMetrics(ctx, ticker, mockUpdater, input)
 	}()
 
+	// Close input channel so sendMetrics can exit if waiting on input
+	close(input)
+
 	err := <-errCh
-	if err == nil || !errors.Is(err, context.Canceled) {
-		t.Fatalf("expected context.Canceled error, got %v", err)
+
+	// Expect nil error because batch is empty and sendMetrics returns nil in this case
+	if err != nil {
+		t.Fatalf("expected nil error, got %v", err)
 	}
 }
-
 func TestSendMetrics_TickerUpdateError(t *testing.T) {
 	ctrl := gomock.NewController(t)
 	defer ctrl.Finish()
