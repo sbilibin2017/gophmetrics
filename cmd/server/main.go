@@ -23,8 +23,7 @@ import (
 )
 
 func main() {
-	err := parseFlags()
-	if err != nil {
+	if err := parseFlags(); err != nil {
 		log.Fatal(err)
 	}
 
@@ -46,9 +45,9 @@ func parseFlags() error {
 	if len(pflag.Args()) > 0 {
 		return errors.New("unknown flags or arguments are provided")
 	}
-	address := os.Getenv("ADDRESS")
-	if address != "" {
-		addr = address
+	addressEnv := os.Getenv("ADDRESS")
+	if addressEnv != "" {
+		addr = addressEnv
 	}
 	return nil
 }
@@ -75,12 +74,15 @@ func run(ctx context.Context) error {
 		updateHandler := httpHandlers.NewMetricUpdatePathHandler(service)
 		getHandler := httpHandlers.NewMetricGetPathHandler(service)
 		listHandler := httpHandlers.NewMetricListHTMLHandler(service)
+		updateBodyHandler := httpHandlers.NewMetricUpdateBodyHandler(service)
+		getBodyHandler := httpHandlers.NewMetricGetBodyHandler(service)
 
 		r := chi.NewRouter()
 		r.Use(middlewares.LoggingMiddleware(logger))
-
 		r.Post("/update/{type}/{name}/{value}", updateHandler)
+		r.Post("/update/", updateBodyHandler)
 		r.Get("/value/{type}/{id}", getHandler)
+		r.Post("/value/", getBodyHandler)
 		r.Get("/", listHandler)
 
 		srv := &http.Server{
