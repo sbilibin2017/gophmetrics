@@ -14,10 +14,12 @@ import (
 	"github.com/go-chi/chi/v5"
 	"github.com/sbilibin2017/gophmetrics/internal/configs/address"
 	httpHandlers "github.com/sbilibin2017/gophmetrics/internal/handlers/http"
+	"github.com/sbilibin2017/gophmetrics/internal/middlewares"
 	"github.com/sbilibin2017/gophmetrics/internal/models"
 	"github.com/sbilibin2017/gophmetrics/internal/repositories/memory"
 	"github.com/sbilibin2017/gophmetrics/internal/services"
 	"github.com/spf13/pflag"
+	"go.uber.org/zap"
 )
 
 func main() {
@@ -56,22 +58,27 @@ func run(ctx context.Context) error {
 
 	switch parsedAddr.Scheme {
 	case address.SchemeHTTP:
-		// In-memory metric storage
+		logger, err := zap.NewProduction()
+		if err != nil {
+			return err
+		}
+		defer logger.Sync()
+
 		data := make(map[models.MetricID]models.Metrics)
 		writer := memory.NewMetricWriteRepository(data)
 		reader := memory.NewMetricReadRepository(data)
 		service := services.NewMetricService(writer, reader)
 
-		// Context for graceful shutdown
 		ctx, stop := signal.NotifyContext(ctx, os.Interrupt, syscall.SIGTERM, syscall.SIGQUIT)
 		defer stop()
 
-		// Setup HTTP handlers
 		updateHandler := httpHandlers.NewMetricUpdatePathHandler(service)
 		getHandler := httpHandlers.NewMetricGetPathHandler(service)
 		listHandler := httpHandlers.NewMetricListHTMLHandler(service)
 
 		r := chi.NewRouter()
+		r.Use(middlewares.LoggingMiddleware(logger))
+
 		r.Post("/update/{type}/{name}/{value}", updateHandler)
 		r.Get("/value/{type}/{id}", getHandler)
 		r.Get("/", listHandler)
@@ -86,9 +93,7 @@ func run(ctx context.Context) error {
 		go func() {
 			err := srv.ListenAndServe()
 			if err != nil && err != http.ErrServerClosed {
-				errChan <- fmt.Errorf("http server error: %w", err)
-			} else {
-				errChan <- nil
+				errChan <- err
 			}
 		}()
 
@@ -102,7 +107,6 @@ func run(ctx context.Context) error {
 
 		shutdownCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 		defer cancel()
-
 		return srv.Shutdown(shutdownCtx)
 
 	case address.SchemeHTTPS:
