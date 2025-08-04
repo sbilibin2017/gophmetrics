@@ -8,32 +8,37 @@ import (
 	"go.uber.org/zap"
 )
 
-func LoggingMiddleware(logger *zap.Logger) func(http.Handler) http.Handler {
-	return func(next http.Handler) http.Handler {
-		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			start := time.Now()
+var logger *zap.Logger
 
-			rw := &responseWriter{
-				ResponseWriter: w,
-				statusCode:     http.StatusOK,
-			}
+func init() {
+	logger, _ = zap.NewProduction()
+}
 
-			next.ServeHTTP(rw, r)
+// LoggingMiddleware is a middleware that logs request and response info
+func LoggingMiddleware(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		start := time.Now()
 
-			duration := time.Since(start)
+		rw := &responseWriter{
+			ResponseWriter: w,
+			statusCode:     http.StatusOK,
+		}
 
-			logger.Info("request",
-				zap.String("method", r.Method),
-				zap.String("uri", r.RequestURI),
-				zap.Duration("duration", duration),
-			)
+		next.ServeHTTP(rw, r)
 
-			logger.Info("response",
-				zap.Int("status", rw.statusCode),
-				zap.String("response_size", strconv.Itoa(rw.size)+"B"),
-			)
-		})
-	}
+		duration := time.Since(start)
+
+		logger.Info("request",
+			zap.String("method", r.Method),
+			zap.String("uri", r.RequestURI),
+			zap.Duration("duration", duration),
+		)
+
+		logger.Info("response",
+			zap.Int("status", rw.statusCode),
+			zap.String("response_size", strconv.Itoa(rw.size)+"B"),
+		)
+	})
 }
 
 type responseWriter struct {

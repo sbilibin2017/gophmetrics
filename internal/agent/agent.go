@@ -11,11 +11,9 @@ import (
 
 // Updater defines an interface to send batches of metrics.
 type Updater interface {
-	// Update sends a batch of metrics.
 	Update(ctx context.Context, metrics []*models.Metrics) error
 }
 
-// RunMetricAgent runs the metric agent loop.
 func RunMetricAgent(
 	ctx context.Context,
 	updater Updater,

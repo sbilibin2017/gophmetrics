@@ -13,10 +13,10 @@ import (
 	"go.uber.org/zap/zapcore"
 )
 
-// вспомогательная функция для создания логгера с буфером
+// helper to create a logger writing to a buffer
 func newBufferedLogger(buf *bytes.Buffer) *zap.Logger {
 	encoderCfg := zap.NewDevelopmentEncoderConfig()
-	encoderCfg.TimeKey = "" // чтобы избежать разной метки времени в тестах
+	encoderCfg.TimeKey = "" // avoid timestamp differences in tests
 
 	core := zapcore.NewCore(
 		zapcore.NewConsoleEncoder(encoderCfg),
@@ -29,9 +29,10 @@ func newBufferedLogger(buf *bytes.Buffer) *zap.Logger {
 
 func TestLoggingMiddleware(t *testing.T) {
 	var logBuffer bytes.Buffer
-	logger := newBufferedLogger(&logBuffer)
+	// override the global logger used by the middleware
+	logger = newBufferedLogger(&logBuffer)
 
-	// тестовый хендлер
+	// test handler that writes a response with delay
 	testHandler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		time.Sleep(10 * time.Millisecond)
 		io.WriteString(w, "test response")
@@ -40,30 +41,27 @@ func TestLoggingMiddleware(t *testing.T) {
 	req := httptest.NewRequest(http.MethodGet, "/test", nil)
 	w := httptest.NewRecorder()
 
-	handlerWithMiddleware := LoggingMiddleware(logger)(testHandler)
+	handlerWithMiddleware := LoggingMiddleware(testHandler)
 	handlerWithMiddleware.ServeHTTP(w, req)
 
 	resp := w.Result()
-	defer resp.Body.Close() // ← обязательно
+	defer resp.Body.Close()
 
 	body, err := io.ReadAll(resp.Body)
 	if err != nil {
 		t.Fatalf("failed to read response body: %v", err)
 	}
 
-	// проверка тела ответа
 	if string(body) != "test response" {
 		t.Errorf("unexpected response body: %s", string(body))
 	}
 
-	// проверка кода статуса
 	if resp.StatusCode != http.StatusOK {
 		t.Errorf("unexpected status code: got %d, want %d", resp.StatusCode, http.StatusOK)
 	}
 
 	logOutput := logBuffer.String()
 
-	// проверка, что лог содержит нужные строки
 	if !strings.Contains(logOutput, "request") {
 		t.Errorf("log does not contain request entry:\n%s", logOutput)
 	}
