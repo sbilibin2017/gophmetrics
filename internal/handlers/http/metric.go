@@ -2,6 +2,7 @@ package http
 
 import (
 	"context"
+	"encoding/json"
 	"net/http"
 	"strconv"
 	"strings"
@@ -49,12 +50,12 @@ func NewMetricUpdatePathHandler(updater Updater) http.HandlerFunc {
 		valStr := chi.URLParam(r, "value")
 
 		if strings.TrimSpace(id) == "" {
-			w.WriteHeader(http.StatusNotFound)
+			http.Error(w, "Not found", http.StatusNotFound)
 			return
 		}
 
 		if mType != models.Gauge && mType != models.Counter {
-			w.WriteHeader(http.StatusBadRequest)
+			http.Error(w, "Bad request", http.StatusBadRequest)
 			return
 		}
 
@@ -66,21 +67,21 @@ func NewMetricUpdatePathHandler(updater Updater) http.HandlerFunc {
 		case models.Gauge:
 			v, err := strconv.ParseFloat(valStr, 64)
 			if err != nil {
-				w.WriteHeader(http.StatusBadRequest)
+				http.Error(w, "Bad request", http.StatusBadRequest)
 				return
 			}
 			metric.Value = &v
 		case models.Counter:
 			d, err := strconv.ParseInt(valStr, 10, 64)
 			if err != nil {
-				w.WriteHeader(http.StatusBadRequest)
+				http.Error(w, "Bad request", http.StatusBadRequest)
 				return
 			}
 			metric.Delta = &d
 		}
 
 		if _, err := updater.Update(ctx, &metric); err != nil {
-			w.WriteHeader(http.StatusInternalServerError)
+			http.Error(w, "Internal server error", http.StatusInternalServerError)
 			return
 		}
 
@@ -110,42 +111,42 @@ func NewMetricGetPathHandler(getter Getter) http.HandlerFunc {
 		id := chi.URLParam(r, "id")
 
 		if strings.TrimSpace(id) == "" {
-			w.WriteHeader(http.StatusNotFound)
+			http.Error(w, "Not found", http.StatusNotFound)
 			return
 		}
 		if mType != models.Gauge && mType != models.Counter {
-			w.WriteHeader(http.StatusBadRequest)
+			http.Error(w, "Bad request", http.StatusBadRequest)
 			return
 		}
 
 		metric, err := getter.Get(ctx, &models.MetricID{ID: id, MType: mType})
 		if err != nil {
-			w.WriteHeader(http.StatusInternalServerError)
+			http.Error(w, "Internal server error", http.StatusInternalServerError)
 			return
 		}
 
 		if metric == nil {
-			http.Error(w, "metric not found", http.StatusNotFound)
+			http.Error(w, "Not found", http.StatusNotFound)
 			return
 		}
 
 		switch metric.MType {
 		case models.Gauge:
 			if metric.Value == nil {
-				w.WriteHeader(http.StatusNotFound)
+				http.Error(w, "Not found", http.StatusNotFound)
 				return
 			}
 			w.Header().Set("Content-Type", "text/plain")
 			w.Write([]byte(strconv.FormatFloat(*metric.Value, 'f', -1, 64)))
 		case models.Counter:
 			if metric.Delta == nil {
-				w.WriteHeader(http.StatusNotFound)
+				http.Error(w, "Not found", http.StatusNotFound)
 				return
 			}
 			w.Header().Set("Content-Type", "text/plain")
 			w.Write([]byte(strconv.FormatInt(*metric.Delta, 10)))
 		default:
-			w.WriteHeader(http.StatusBadRequest)
+			http.Error(w, "Bad request", http.StatusBadRequest)
 		}
 	}
 }
@@ -166,7 +167,7 @@ func NewMetricListHTMLHandler(lister Lister) http.HandlerFunc {
 
 		metrics, err := lister.List(ctx)
 		if err != nil {
-			w.WriteHeader(http.StatusInternalServerError)
+			http.Error(w, "Internal server error", http.StatusInternalServerError)
 			return
 		}
 
@@ -194,5 +195,103 @@ func NewMetricListHTMLHandler(lister Lister) http.HandlerFunc {
 
 		w.Header().Set("Content-Type", "text/html; charset=utf-8")
 		w.Write([]byte(sb.String()))
+	}
+}
+
+// NewMetricUpdateBodyHandler creates a handler that updates a metric using JSON payload.
+//
+// @Summary Save or update a metric (JSON)
+// @Description Updates a metric value or delta via POST request with JSON body.
+// @Tags metrics
+// @Accept json
+// @Produce json
+// @Param metric body models.Metrics true "Metric JSON body"
+// @Success 200 {object} models.Metrics "Updated metric returned in response"
+// @Failure 400 "Bad Request"
+// @Failure 500 "Internal Server Error"
+// @Router /update/ [post]
+func NewMetricUpdateBodyHandler(updater Updater) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		if r.Header.Get("Content-Type") != "application/json" {
+			http.Error(w, "Bad request", http.StatusBadRequest)
+			return
+		}
+
+		var metric models.Metrics
+		dec := json.NewDecoder(r.Body)
+		defer r.Body.Close()
+
+		if err := dec.Decode(&metric); err != nil {
+			http.Error(w, "Bad request", http.StatusBadRequest)
+			return
+		}
+
+		if metric.ID == "" || (metric.MType != models.Gauge && metric.MType != models.Counter) {
+			http.Error(w, "Bad request", http.StatusBadRequest)
+			return
+		}
+
+		updatedMetric, err := updater.Update(r.Context(), &metric)
+		if err != nil {
+			http.Error(w, "Internal server error", http.StatusInternalServerError)
+			return
+		}
+
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusOK)
+
+		json.NewEncoder(w).Encode(updatedMetric)
+	}
+}
+
+// NewMetricGetBodyHandler creates a handler that retrieves a metric by JSON payload.
+//
+// @Summary Get metric value (JSON)
+// @Description Retrieves a metric by ID and type using POST JSON body.
+// @Tags metrics
+// @Accept json
+// @Produce json
+// @Param metric body models.Metrics true "Metric request body with ID and MType"
+// @Success 200 {object} models.Metrics "Metric returned with current value"
+// @Failure 400 "Bad Request"
+// @Failure 404 "Not Found"
+// @Failure 500 "Internal Server Error"
+// @Router /value/ [post]
+func NewMetricGetBodyHandler(getter Getter) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		if r.Header.Get("Content-Type") != "application/json" {
+			http.Error(w, "Bad request", http.StatusBadRequest)
+			return
+		}
+
+		var requestMetric models.Metrics
+		dec := json.NewDecoder(r.Body)
+		defer r.Body.Close()
+
+		if err := dec.Decode(&requestMetric); err != nil {
+			http.Error(w, "Bad request", http.StatusBadRequest)
+			return
+		}
+
+		if requestMetric.ID == "" || (requestMetric.MType != models.Gauge && requestMetric.MType != models.Counter) {
+			http.Error(w, "Bad request", http.StatusBadRequest)
+			return
+		}
+
+		metric, err := getter.Get(r.Context(), &models.MetricID{ID: requestMetric.ID, MType: requestMetric.MType})
+		if err != nil {
+			http.Error(w, "Internal server error", http.StatusInternalServerError)
+			return
+		}
+
+		if metric == nil {
+			http.Error(w, "Not found", http.StatusNotFound)
+			return
+		}
+
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusOK)
+
+		json.NewEncoder(w).Encode(metric)
 	}
 }
