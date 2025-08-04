@@ -158,7 +158,7 @@ func sendMetrics(
 			if len(batch) > 0 {
 				return updater.Update(ctx, batch)
 			}
-			return ctx.Err()
+			return nil
 
 		case m, ok := <-in:
 			if !ok {

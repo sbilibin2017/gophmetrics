@@ -14,10 +14,12 @@ import (
 	"github.com/go-chi/chi/v5"
 	"github.com/sbilibin2017/gophmetrics/internal/configs/address"
 	httpHandlers "github.com/sbilibin2017/gophmetrics/internal/handlers/http"
-	"github.com/sbilibin2017/gophmetrics/internal/middlewares"
+	httpMiddlewares "github.com/sbilibin2017/gophmetrics/internal/middlewares/http"
+
 	"github.com/sbilibin2017/gophmetrics/internal/models"
 	"github.com/sbilibin2017/gophmetrics/internal/repositories/memory"
 	"github.com/sbilibin2017/gophmetrics/internal/services"
+
 	"github.com/spf13/pflag"
 	"go.uber.org/zap"
 )
@@ -78,7 +80,9 @@ func run(ctx context.Context) error {
 		getBodyHandler := httpHandlers.NewMetricGetBodyHandler(service)
 
 		r := chi.NewRouter()
-		r.Use(middlewares.LoggingMiddleware(logger))
+		r.Use(httpMiddlewares.LoggingMiddleware(logger))
+		r.Use(httpMiddlewares.GzipMiddleware) // Pass compressor instance here
+
 		r.Post("/update/{type}/{name}/{value}", updateHandler)
 		r.Post("/update/", updateBodyHandler)
 		r.Get("/value/{type}/{id}", getHandler)

@@ -11,21 +11,13 @@ import (
 
 	"github.com/sbilibin2017/gophmetrics/internal/agent"
 	"github.com/sbilibin2017/gophmetrics/internal/configs/address"
-	"github.com/sbilibin2017/gophmetrics/internal/configs/transport/http"
-	"github.com/sbilibin2017/gophmetrics/internal/facades"
+
+	httpFacades "github.com/sbilibin2017/gophmetrics/internal/facades/http"
+
+	httpClient "github.com/sbilibin2017/gophmetrics/internal/configs/transport/http"
+
 	"github.com/spf13/pflag"
 )
-
-func main() {
-	err := parseFlags()
-	if err != nil {
-		log.Fatal(err)
-	}
-
-	if err := run(context.Background()); err != nil {
-		log.Fatal(err)
-	}
-}
 
 var (
 	addr           string
@@ -64,18 +56,34 @@ func parseFlags() error {
 	return nil
 }
 
+func main() {
+	if err := parseFlags(); err != nil {
+		log.Fatal(err)
+	}
+
+	if err := run(context.Background()); err != nil {
+		log.Fatal(err)
+	}
+}
+
 func run(ctx context.Context) error {
 	parsedAddr := address.New(addr)
 
 	switch parsedAddr.Scheme {
 	case address.SchemeHTTP:
-		client := http.New(parsedAddr.String(), http.WithRetryPolicy(http.RetryPolicy{
-			Count:   3,
-			Wait:    time.Second,
-			MaxWait: 5 * time.Second,
-		}))
+		client := httpClient.New(
+			parsedAddr.String(),
+			httpClient.WithRetryPolicy(
+				httpClient.RetryPolicy{
+					Count:   3,
+					Wait:    500 * time.Millisecond,
+					MaxWait: 5 * time.Second,
+				},
+			),
+		)
 
-		updater := facades.NewMetricHTTPFacade(client)
+		// Create the HTTP updater facade
+		updater := httpFacades.NewMetricHTTPFacade(client)
 
 		pollTicker := time.NewTicker(time.Duration(pollInterval) * time.Second)
 		defer pollTicker.Stop()
