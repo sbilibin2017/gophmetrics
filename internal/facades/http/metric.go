@@ -46,6 +46,7 @@ func (f *MetricHTTPFacade) Update(ctx context.Context, metrics []*models.Metrics
 			SetHeader("Content-Encoding", "gzip").
 			SetBody(compressedData).
 			Post("/update/")
+
 		if err != nil {
 			return err
 		}

@@ -1,6 +1,7 @@
 package http
 
 import (
+	"strings"
 	"time"
 
 	"github.com/go-resty/resty/v2"
@@ -12,9 +13,12 @@ type Opt func(*resty.Client)
 
 // New creates and returns a new instance of resty.Client with the given base URL and options.
 // Options are passed as a slice of Opt functions for flexible client configuration.
+// The baseURL will have the "http://" or "https://" prefix trimmed automatically.
 func New(baseURL string, opts ...Opt) *resty.Client {
+	if !strings.HasPrefix(baseURL, "http://") && !strings.HasPrefix(baseURL, "https://") {
+		baseURL = "http://" + baseURL
+	}
 	client := resty.New().SetBaseURL(baseURL)
-
 	for _, opt := range opts {
 		opt(client)
 	}
@@ -45,8 +49,12 @@ func WithRetryPolicy(policies ...RetryPolicy) Opt {
 				if policy.MaxWait > 0 {
 					c.SetRetryMaxWaitTime(policy.MaxWait)
 				}
-				break
+				return
 			}
 		}
+
+		c.SetRetryCount(0)
+		c.SetRetryWaitTime(0)
+		c.SetRetryMaxWaitTime(0)
 	}
 }
