@@ -166,23 +166,21 @@ func runMemoryHTTP(
 	var ticker *time.Ticker
 	if storeInterval > 0 {
 		ticker = time.NewTicker(time.Duration(storeInterval) * time.Second)
+		defer ticker.Stop()
 	}
 
 	if fileStoragePath != "" {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			err := worker.Run(ctx, restore, ticker, reader, writer, readerFile, writerFile)
-			_ = err // ignore error or handle as needed
-			if ticker != nil {
-				ticker.Stop()
+			if err := worker.Run(ctx, restore, ticker, reader, writer, readerFile, writerFile); err != nil {
+				errChan <- err
 			}
 		}()
 	}
 
 	go func() {
-		err := server.ListenAndServe()
-		if err != nil && err != http.ErrServerClosed {
+		if err := server.ListenAndServe(); err != nil && err != http.ErrServerClosed {
 			errChan <- err
 		}
 	}()
@@ -266,25 +264,21 @@ func runDBHTTP(
 	var ticker *time.Ticker
 	if storeInterval > 0 {
 		ticker = time.NewTicker(time.Duration(storeInterval) * time.Second)
+		defer ticker.Stop()
 	}
 
 	if fileStoragePath != "" {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			err := worker.Run(ctx, restore, ticker, reader, writer, readerFile, writerFile)
-			if err != nil {
+			if err := worker.Run(ctx, restore, ticker, reader, writer, readerFile, writerFile); err != nil {
 				errChan <- err
-			}
-			if ticker != nil {
-				ticker.Stop()
 			}
 		}()
 	}
 
 	go func() {
-		err := server.ListenAndServe()
-		if err != nil && err != http.ErrServerClosed {
+		if err := server.ListenAndServe(); err != nil && err != http.ErrServerClosed {
 			errChan <- err
 		}
 	}()

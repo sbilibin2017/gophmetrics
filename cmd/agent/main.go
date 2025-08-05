@@ -18,6 +18,17 @@ import (
 	"github.com/spf13/pflag"
 )
 
+func main() {
+	err := parseFlags()
+	if err != nil {
+		log.Fatal(err)
+	}
+
+	if err := run(context.Background()); err != nil {
+		log.Fatal(err)
+	}
+}
+
 var (
 	addr           string
 	pollInterval   int
@@ -28,17 +39,6 @@ func init() {
 	pflag.StringVarP(&addr, "address", "a", "http://localhost:8080", "server URL")
 	pflag.IntVarP(&pollInterval, "poll-interval", "p", 2, "poll interval in seconds")
 	pflag.IntVarP(&reportInterval, "report-interval", "r", 10, "report interval in seconds")
-}
-
-func main() {
-	err := parseFlags()
-	if err != nil {
-		log.Fatal(err)
-	}
-
-	if err := run(context.Background()); err != nil {
-		log.Fatal(err)
-	}
 }
 
 func parseFlags() error {
