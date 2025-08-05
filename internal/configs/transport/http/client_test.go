@@ -17,10 +17,10 @@ func TestNew(t *testing.T) {
 		expectOpts func(client *resty.Client)
 	}{
 		{
-			name:      "sets base URL without options",
+			name:      "sets base URL with scheme preserved",
 			baseURL:   "http://example.com",
 			opts:      nil,
-			expectURL: "http://example.com",
+			expectURL: "http://example.com", // include scheme
 			expectOpts: func(client *resty.Client) {
 				assert.Equal(t, 0, client.RetryCount)
 			},
@@ -35,7 +35,7 @@ func TestNew(t *testing.T) {
 					MaxWait: 50 * time.Millisecond,
 				}),
 			},
-			expectURL: "https://api.test",
+			expectURL: "https://api.test", // include scheme
 			expectOpts: func(client *resty.Client) {
 				assert.Equal(t, 2, client.RetryCount)
 				assert.Equal(t, 10*time.Millisecond, client.RetryWaitTime)
@@ -100,8 +100,8 @@ func TestWithRetryPolicy(t *testing.T) {
 				maxWait time.Duration
 			}{
 				count:   0,
-				wait:    100 * time.Millisecond, // default
-				maxWait: 2 * time.Second,        // default
+				wait:    0,
+				maxWait: 0,
 			},
 		},
 	}

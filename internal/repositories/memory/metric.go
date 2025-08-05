@@ -60,7 +60,9 @@ func (r *MetricReadRepository) Get(
 	defer r.mu.RUnlock()
 
 	if metric, ok := r.data[id]; ok {
-		return &metric, nil
+		// Create a copy so caller gets a unique pointer
+		metricCopy := metric
+		return &metricCopy, nil
 	}
 	return nil, nil
 }
@@ -74,7 +76,7 @@ func (r *MetricReadRepository) List(
 
 	metrics := make([]*models.Metrics, 0, len(r.data))
 	for _, m := range r.data {
-		metric := m
+		metric := m // copy value to avoid pointer aliasing
 		metrics = append(metrics, &metric)
 	}
 
