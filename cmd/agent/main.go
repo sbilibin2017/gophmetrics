@@ -19,17 +19,25 @@ import (
 )
 
 var (
-	addr           string
-	pollInterval   int
+	// addr is the server URL to which the agent reports metrics.
+	addr string
+
+	// pollInterval is the interval in seconds at which metrics are collected.
+	pollInterval int
+
+	// reportInterval is the interval in seconds at which collected metrics are reported.
 	reportInterval int
 )
 
+// init initializes command-line flags with default values.
 func init() {
 	pflag.StringVarP(&addr, "address", "a", "http://localhost:8080", "server URL")
 	pflag.IntVarP(&pollInterval, "poll-interval", "p", 2, "poll interval in seconds")
 	pflag.IntVarP(&reportInterval, "report-interval", "r", 10, "report interval in seconds")
 }
 
+// main is the entry point of the metrics agent program.
+// It parses flags and starts the agent.
 func main() {
 	err := parseFlags()
 	if err != nil {
@@ -41,6 +49,8 @@ func main() {
 	}
 }
 
+// parseFlags parses command-line flags and overrides them
+// with environment variables if set.
 func parseFlags() error {
 	pflag.Parse()
 
@@ -71,6 +81,8 @@ func parseFlags() error {
 	return nil
 }
 
+// run starts the agent based on the scheme of the provided address.
+// Currently only HTTP scheme is supported.
 func run(ctx context.Context) error {
 	parsedAddr := address.New(addr)
 	switch parsedAddr.Scheme {
@@ -85,6 +97,9 @@ func run(ctx context.Context) error {
 	}
 }
 
+// runHTTP runs the agent using HTTP transport.
+// It sets up polling and reporting tickers, signal handling,
+// and starts the metric agent worker.
 func runHTTP(
 	ctx context.Context,
 	addr string,
@@ -110,8 +125,10 @@ func runHTTP(
 	reportTicker := time.NewTicker(time.Duration(reportInterval) * time.Second)
 	defer reportTicker.Stop()
 
-	ctx, stop := signal.NotifyContext(ctx, os.Interrupt, syscall.SIGTERM, syscall.SIGQUIT)
+	a := agent.NewMetricAgent(updater, pollTicker, reportTicker)
+
+	ctx, stop := signal.NotifyContext(ctx, os.Interrupt, syscall.SIGTERM, syscall.SIGINT)
 	defer stop()
 
-	return agent.Run(ctx, updater, pollTicker, reportTicker)
+	return a.Start(ctx)
 }
