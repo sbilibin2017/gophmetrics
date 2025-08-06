@@ -100,7 +100,7 @@ func (r *MetricReadRepository) List(ctx context.Context) ([]*models.Metrics, err
 	return metricsSlice, nil
 }
 
-// Get fetches a single metric from file by ID and type.
+// Get fetches the last matching metric from file by ID and type.
 func (r *MetricReadRepository) Get(ctx context.Context, id models.MetricID) (*models.Metrics, error) {
 	r.mu.RLock()
 	defer r.mu.RUnlock()
@@ -114,6 +114,7 @@ func (r *MetricReadRepository) Get(ctx context.Context, id models.MetricID) (*mo
 	}
 	defer file.Close()
 
+	var result *models.Metrics
 	scanner := bufio.NewScanner(file)
 	for scanner.Scan() {
 		var metric models.Metrics
@@ -121,7 +122,8 @@ func (r *MetricReadRepository) Get(ctx context.Context, id models.MetricID) (*mo
 			return nil, err
 		}
 		if metric.ID == id.ID && metric.MType == id.MType {
-			return &metric, nil
+			copy := metric
+			result = &copy
 		}
 	}
 
@@ -129,5 +131,5 @@ func (r *MetricReadRepository) Get(ctx context.Context, id models.MetricID) (*mo
 		return nil, err
 	}
 
-	return nil, nil
+	return result, nil
 }

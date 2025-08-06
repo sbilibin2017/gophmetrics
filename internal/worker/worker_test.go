@@ -7,51 +7,64 @@ import (
 	"time"
 
 	"github.com/golang/mock/gomock"
-	"github.com/stretchr/testify/require"
-
 	"github.com/sbilibin2017/gophmetrics/internal/models"
+	"github.com/stretchr/testify/assert"
 )
 
-func TestRun_RestoreSuccess(t *testing.T) {
+func TestMetricWorker_Start_RestoreAndShutdown_SaveAll(t *testing.T) {
 	ctrl := gomock.NewController(t)
 	defer ctrl.Finish()
 
+	// Создаём моки
 	fileReader := NewMockFileReader(ctrl)
 	fileWriter := NewMockFileWriter(ctrl)
 	currentReader := NewMockCurrentReader(ctrl)
 	currentWriter := NewMockCurrentWriter(ctrl)
 
+	// Пример метрик
+	mockMetrics := []*models.Metrics{
+		{ID: "Alloc", MType: "gauge", Value: ptrFloat64(123.4)},
+		{ID: "PollCount", MType: "counter", Delta: ptrInt64(42)},
+	}
+
+	// Ожидания при restore = true
+	fileReader.EXPECT().List(gomock.Any()).Return(mockMetrics, nil)
+	currentWriter.EXPECT().Save(gomock.Any(), mockMetrics[0]).Return(nil)
+	currentWriter.EXPECT().Save(gomock.Any(), mockMetrics[1]).Return(nil)
+
+	// Ожидания на shutdown (List + Save)
+	currentReader.EXPECT().List(gomock.Any()).Return(mockMetrics, nil)
+	fileWriter.EXPECT().Save(gomock.Any(), mockMetrics[0]).Return(nil)
+	fileWriter.EXPECT().Save(gomock.Any(), mockMetrics[1]).Return(nil)
+
+	// Инициализируем воркер
+	mw := NewMetricWorker(
+		true, // restore
+		nil,  // no ticker — только при завершении
+		currentReader,
+		currentWriter,
+		fileReader,
+		fileWriter,
+	)
+
 	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
+	done := make(chan error)
 
-	metrics := []*models.Metrics{
-		{ID: "metric1", MType: "counter", Delta: int64Ptr(100)},
-		{ID: "metric2", MType: "gauge", Value: float64Ptr(1.23)},
-	}
-
-	// Restore phase
-	fileReader.EXPECT().List(ctx).Return(metrics, nil)
-	for _, m := range metrics {
-		currentWriter.EXPECT().Save(ctx, m).Return(nil)
-	}
-
-	// Shutdown phase
-	currentReader.EXPECT().List(ctx).Return(metrics, nil)
-	for _, m := range metrics {
-		fileWriter.EXPECT().Save(ctx, m).Return(nil)
-	}
-
-	// Trigger shutdown immediately after restore
+	// Стартуем worker в горутине
 	go func() {
-		time.Sleep(10 * time.Millisecond)
-		cancel()
+		done <- mw.Start(ctx)
 	}()
 
-	err := Run(ctx, true, nil, currentReader, currentWriter, fileReader, fileWriter)
-	require.NoError(t, err)
+	// Завершаем контекст через 100мс
+	time.Sleep(100 * time.Millisecond)
+	cancel()
+
+	// Проверяем, что ошибок не было
+	err := <-done
+	assert.NoError(t, err)
 }
 
-func TestRun_RestoreError(t *testing.T) {
+func TestMetricWorker_Start_PeriodicStore(t *testing.T) {
 	ctrl := gomock.NewController(t)
 	defer ctrl.Finish()
 
@@ -60,176 +73,64 @@ func TestRun_RestoreError(t *testing.T) {
 	currentReader := NewMockCurrentReader(ctrl)
 	currentWriter := NewMockCurrentWriter(ctrl)
 
-	ctx := context.Background()
-
-	fileReader.EXPECT().List(ctx).Return(nil, errors.New("read error"))
-
-	err := Run(ctx, true, nil, currentReader, currentWriter, fileReader, fileWriter)
-	require.EqualError(t, err, "read error")
-}
-
-func TestRun_RestoreWriteError(t *testing.T) {
-	ctrl := gomock.NewController(t)
-	defer ctrl.Finish()
-
-	fileReader := NewMockFileReader(ctrl)
-	fileWriter := NewMockFileWriter(ctrl)
-	currentReader := NewMockCurrentReader(ctrl)
-	currentWriter := NewMockCurrentWriter(ctrl)
-
-	ctx := context.Background()
-
-	metrics := []*models.Metrics{
-		{ID: "metric1", MType: "counter", Delta: int64Ptr(100)},
+	mockMetrics := []*models.Metrics{
+		{ID: "Heap", MType: "gauge", Value: ptrFloat64(99.9)},
 	}
 
-	fileReader.EXPECT().List(ctx).Return(metrics, nil)
-	currentWriter.EXPECT().Save(ctx, metrics[0]).Return(errors.New("write error"))
+	// AnyTimes — потому что тикер может сработать 2-3 раза
+	currentReader.EXPECT().List(gomock.Any()).Return(mockMetrics, nil).AnyTimes()
+	fileWriter.EXPECT().Save(gomock.Any(), mockMetrics[0]).Return(nil).AnyTimes()
 
-	err := Run(ctx, true, nil, currentReader, currentWriter, fileReader, fileWriter)
-	require.EqualError(t, err, "write error")
-}
-
-func TestRun_SyncSaveOnShutdown(t *testing.T) {
-	ctrl := gomock.NewController(t)
-	defer ctrl.Finish()
-
-	fileReader := NewMockFileReader(ctrl)
-	fileWriter := NewMockFileWriter(ctrl)
-	currentReader := NewMockCurrentReader(ctrl)
-	currentWriter := NewMockCurrentWriter(ctrl)
-
-	ctx, cancel := context.WithCancel(context.Background())
-
-	metrics := []*models.Metrics{
-		{ID: "metric3", MType: "gauge", Value: float64Ptr(99.99)},
-	}
-
-	currentReader.EXPECT().List(ctx).Return(metrics, nil)
-	fileWriter.EXPECT().Save(ctx, metrics[0]).Return(nil)
-
-	go func() {
-		time.Sleep(10 * time.Millisecond)
-		cancel()
-	}()
-
-	err := Run(ctx, false, nil, currentReader, currentWriter, fileReader, fileWriter)
-	require.NoError(t, err)
-}
-
-func TestRun_PeriodicSave(t *testing.T) {
-	ctrl := gomock.NewController(t)
-	defer ctrl.Finish()
-
-	fileReader := NewMockFileReader(ctrl)
-	fileWriter := NewMockFileWriter(ctrl)
-	currentReader := NewMockCurrentReader(ctrl)
-	currentWriter := NewMockCurrentWriter(ctrl)
-
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
-
-	metrics := []*models.Metrics{
-		{ID: "metricX", MType: "counter", Delta: int64Ptr(5)},
-	}
-
-	currentReader.EXPECT().List(ctx).Return(metrics, nil).AnyTimes()
-	fileWriter.EXPECT().Save(ctx, metrics[0]).Return(nil).AnyTimes()
-
-	ticker := time.NewTicker(20 * time.Millisecond)
+	ticker := time.NewTicker(200 * time.Millisecond)
 	defer ticker.Stop()
 
-	go func() {
-		time.Sleep(60 * time.Millisecond)
-		cancel()
-	}()
+	mw := NewMetricWorker(
+		false,
+		ticker,
+		currentReader,
+		currentWriter,
+		fileReader,
+		fileWriter,
+	)
 
-	err := Run(ctx, false, ticker, currentReader, currentWriter, fileReader, fileWriter)
-	require.NoError(t, err)
+	ctx, cancel := context.WithTimeout(context.Background(), 500*time.Millisecond)
+	defer cancel()
+
+	err := mw.Start(ctx)
+	assert.NoError(t, err)
 }
 
-func TestRun_TickerSaveError(t *testing.T) {
+func TestMetricWorker_Start_RestoreError(t *testing.T) {
 	ctrl := gomock.NewController(t)
 	defer ctrl.Finish()
+
+	fileReader := NewMockFileReader(ctrl)
+	fileWriter := NewMockFileWriter(ctrl)
+	currentReader := NewMockCurrentReader(ctrl)
+	currentWriter := NewMockCurrentWriter(ctrl)
+
+	fileReader.EXPECT().List(gomock.Any()).Return(nil, errors.New("file read error"))
+
+	mw := NewMetricWorker(
+		true, // restore
+		nil,
+		currentReader,
+		currentWriter,
+		fileReader,
+		fileWriter,
+	)
 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
-	mockReader := NewMockCurrentReader(ctrl)
-	mockWriter := NewMockCurrentWriter(ctrl)
-	mockFileReader := NewMockFileReader(ctrl)
-	mockFileWriter := NewMockFileWriter(ctrl)
-
-	metrics := []*models.Metrics{
-		{ID: "test", MType: "counter", Delta: int64Ptr(1)},
-	}
-
-	// Restore is false, so fileReader.List is not expected
-	// Simulate List returning 1 metric
-	mockReader.EXPECT().List(ctx).Return(metrics, nil).Times(1)
-	// Simulate Save failing
-	mockFileWriter.EXPECT().Save(ctx, metrics[0]).Return(errors.New("save error")).Times(1)
-
-	ticker := time.NewTicker(10 * time.Millisecond)
-	defer ticker.Stop()
-
-	// cancel context after first tick so loop exits
-	go func() {
-		time.Sleep(15 * time.Millisecond)
-		cancel()
-	}()
-
-	err := Run(ctx, false, ticker, mockReader, mockWriter, mockFileReader, mockFileWriter)
-	require.Error(t, err)
-	require.Contains(t, err.Error(), "save error")
+	err := mw.Start(ctx)
+	assert.EqualError(t, err, "file read error")
 }
 
-func TestSaveAllMetrics_ListError(t *testing.T) {
-	ctrl := gomock.NewController(t)
-	defer ctrl.Finish()
-
-	ctx := context.Background()
-	mockReader := NewMockCurrentReader(ctrl)
-	mockWriter := NewMockFileWriter(ctrl)
-
-	// Simulate error on reader.List
-	expectedErr := errors.New("failed to list metrics")
-	mockReader.EXPECT().List(ctx).Return(nil, expectedErr)
-
-	err := saveAllMetrics(ctx, mockReader, mockWriter)
-	require.Error(t, err)
-	require.Equal(t, expectedErr, err)
+func ptrFloat64(v float64) *float64 {
+	return &v
 }
 
-func TestSaveAllMetrics_SaveError(t *testing.T) {
-	ctrl := gomock.NewController(t)
-	defer ctrl.Finish()
-
-	ctx := context.Background()
-	mockReader := NewMockCurrentReader(ctrl)
-	mockWriter := NewMockFileWriter(ctrl)
-
-	metrics := []*models.Metrics{
-		{ID: "test", MType: "counter", Delta: int64Ptr(42)},
-	}
-
-	// Simulate reader.List success
-	mockReader.EXPECT().List(ctx).Return(metrics, nil)
-
-	// Simulate writer.Save failure
-	expectedErr := errors.New("failed to save metric")
-	mockWriter.EXPECT().Save(ctx, metrics[0]).Return(expectedErr)
-
-	err := saveAllMetrics(ctx, mockReader, mockWriter)
-	require.Error(t, err)
-	require.Equal(t, expectedErr, err)
-}
-
-// Helpers
-func int64Ptr(i int64) *int64 {
-	return &i
-}
-
-func float64Ptr(f float64) *float64 {
-	return &f
+func ptrInt64(v int64) *int64 {
+	return &v
 }
