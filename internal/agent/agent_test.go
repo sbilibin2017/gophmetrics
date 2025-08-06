@@ -10,7 +10,7 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-func TestRun_SuccessfulUpdate(t *testing.T) {
+func TestMetricAgent_Start_SuccessfulUpdate(t *testing.T) {
 	ctrl := gomock.NewController(t)
 	defer ctrl.Finish()
 
@@ -33,11 +33,12 @@ func TestRun_SuccessfulUpdate(t *testing.T) {
 		}).
 		AnyTimes()
 
-	err := Run(ctx, mockUpdater, pollTicker, reportTicker)
+	agent := NewMetricAgent(mockUpdater, pollTicker, reportTicker)
+	err := agent.Start(ctx)
 	require.NoError(t, err)
 }
 
-func TestRun_ContextCancelled(t *testing.T) {
+func TestMetricAgent_Start_ContextCancelled(t *testing.T) {
 	ctrl := gomock.NewController(t)
 	defer ctrl.Finish()
 
@@ -52,11 +53,11 @@ func TestRun_ContextCancelled(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel() // Cancel immediately
 
-	err := Run(ctx, mockUpdater, pollTicker, reportTicker)
+	agent := NewMetricAgent(mockUpdater, pollTicker, reportTicker)
+	err := agent.Start(ctx)
 	require.NoError(t, err)
 }
 
-// float64Ptr is a helper to get pointer to float64 value
 func float64Ptr(v float64) *float64 {
 	return &v
 }
@@ -71,7 +72,7 @@ func TestSender_ChannelClosed_WithPendingMetrics(t *testing.T) {
 	reportTicker := time.NewTicker(time.Hour)
 	defer reportTicker.Stop()
 
-	metricsCh := make(chan *models.Metrics, 1) // buffered to avoid blocking
+	metricsCh := make(chan *models.Metrics, 1)
 
 	metric := &models.Metrics{ID: "Alloc", MType: models.Gauge, Value: float64Ptr(123.0)}
 
@@ -85,7 +86,7 @@ func TestSender_ChannelClosed_WithPendingMetrics(t *testing.T) {
 
 	go func() {
 		metricsCh <- metric
-		close(metricsCh) // close after sending
+		close(metricsCh)
 	}()
 
 	err := sender(ctx, reportTicker, mockUpdater, metricsCh)
@@ -121,7 +122,7 @@ func TestSender_ReportTickerTriggersUpdate(t *testing.T) {
 	reportTicker := time.NewTicker(100 * time.Millisecond)
 	defer reportTicker.Stop()
 
-	metricsCh := make(chan *models.Metrics, 1) // buffered to avoid blocking
+	metricsCh := make(chan *models.Metrics, 1)
 
 	metric := &models.Metrics{ID: "HeapAlloc", MType: models.Gauge, Value: float64Ptr(456.0)}
 
@@ -135,7 +136,7 @@ func TestSender_ReportTickerTriggersUpdate(t *testing.T) {
 
 	go func() {
 		metricsCh <- metric
-		// Do not close channel to simulate continuous metrics
+		// Keep channel open to simulate ongoing metrics
 	}()
 
 	go func() {
@@ -184,18 +185,15 @@ func TestSender_ContextDone_WithPendingMetrics(t *testing.T) {
 	require.NoError(t, err)
 }
 
-// containsMetric checks if the slice contains a metric with matching ID, MType, and values.
 func containsMetric(batch []*models.Metrics, want *models.Metrics) bool {
 	for _, m := range batch {
 		if m.ID == want.ID && m.MType == want.MType {
-			// Compare Value pointers safely
 			if m.Value == nil && want.Value == nil {
 				return true
 			}
 			if m.Value != nil && want.Value != nil && *m.Value == *want.Value {
 				return true
 			}
-			// Compare Delta pointers safely
 			if m.Delta == nil && want.Delta == nil {
 				return true
 			}

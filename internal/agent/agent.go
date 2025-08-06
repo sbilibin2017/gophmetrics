@@ -11,22 +11,44 @@ import (
 
 // Updater defines an interface for sending batches of metrics.
 type Updater interface {
-	// Update sends a slice of metrics. Returns an error if the update fails.
+	// Update sends a slice of metrics.
+	// Returns an error if the update fails.
 	Update(ctx context.Context, metrics []*models.Metrics) error
 }
 
-// Run starts metric generation and sending goroutines, coordinating via channels.
-func Run(
-	ctx context.Context,
+// MetricAgent collects runtime metrics periodically and reports them using an Updater.
+type MetricAgent struct {
+	updater      Updater      // Updater interface to send metrics
+	pollTicker   *time.Ticker // ticker controlling metrics collection frequency
+	reportTicker *time.Ticker // ticker controlling metrics reporting frequency
+}
+
+// NewMetricAgent creates a new MetricAgent with the provided updater and tickers.
+// pollTicker controls how often metrics are collected.
+// reportTicker controls how often collected metrics are sent.
+func NewMetricAgent(
 	updater Updater,
 	pollTicker *time.Ticker,
 	reportTicker *time.Ticker,
-) error {
-	metricsCh := generator(ctx, pollTicker)
-	return sender(ctx, reportTicker, updater, metricsCh)
+) *MetricAgent {
+	return &MetricAgent{
+		updater:      updater,
+		pollTicker:   pollTicker,
+		reportTicker: reportTicker,
+	}
 }
 
-// generator collects metrics on pollTicker ticks and sends them on a channel.
+// Start runs the metric agent until the given context is done.
+// It spawns a generator goroutine that collects metrics on pollTicker ticks,
+// and a sender that batches and sends metrics on reportTicker ticks.
+func (ma *MetricAgent) Start(ctx context.Context) error {
+	metricsCh := generator(ctx, ma.pollTicker)
+	return sender(ctx, ma.reportTicker, ma.updater, metricsCh)
+}
+
+// generator collects runtime and custom metrics on each tick of pollTicker.
+// It returns a channel on which individual metrics are sent.
+// The channel is closed when the context is cancelled.
 func generator(ctx context.Context, pollTicker *time.Ticker) chan *models.Metrics {
 	out := make(chan *models.Metrics, 100) // buffered channel for metrics
 
@@ -100,7 +122,10 @@ func generator(ctx context.Context, pollTicker *time.Ticker) chan *models.Metric
 	return out
 }
 
-// sender reads metrics from a channel, batches them, and sends using the updater on reportTicker.
+// sender receives metrics from a channel, batches them, and sends batches
+// using the provided updater on ticks of reportTicker.
+// When the context is cancelled or the metrics channel is closed, the sender
+// attempts a final batch send before returning.
 func sender(ctx context.Context, reportTicker *time.Ticker, updater Updater, metricsCh <-chan *models.Metrics) error {
 	var batch []*models.Metrics
 

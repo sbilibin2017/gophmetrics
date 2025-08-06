@@ -10,24 +10,47 @@ import (
 	"os/signal"
 	"strconv"
 	"strings"
-	"sync"
 	"syscall"
 	"time"
 
 	"github.com/go-chi/chi/v5"
 	"github.com/jmoiron/sqlx"
+	"github.com/pressly/goose"
 	"github.com/sbilibin2017/gophmetrics/internal/configs/address"
 	"github.com/sbilibin2017/gophmetrics/internal/configs/db"
 	httpHandlers "github.com/sbilibin2017/gophmetrics/internal/handlers/http"
 	httpMiddlewares "github.com/sbilibin2017/gophmetrics/internal/middlewares/http"
 	"github.com/sbilibin2017/gophmetrics/internal/models"
+	dbRepo "github.com/sbilibin2017/gophmetrics/internal/repositories/db"
 	"github.com/sbilibin2017/gophmetrics/internal/repositories/file"
 	"github.com/sbilibin2017/gophmetrics/internal/repositories/memory"
+	"github.com/sbilibin2017/gophmetrics/internal/runner"
 	"github.com/sbilibin2017/gophmetrics/internal/services"
 	"github.com/sbilibin2017/gophmetrics/internal/worker"
 	"github.com/spf13/pflag"
 )
 
+var (
+	// addr is the address the HTTP server listens on.
+	addr string
+
+	// storeInterval is the interval in seconds to save metrics.
+	storeInterval int
+
+	// fileStoragePath is the path to the file to store metrics.
+	fileStoragePath string
+
+	// restore indicates whether to restore metrics from the file on startup.
+	restore bool
+
+	// databaseDSN is the PostgreSQL DSN connection string.
+	databaseDSN string
+
+	// migrationsDir is the path to database migrations directory.
+	migrationsDir string = "../../migrations"
+)
+
+// main is the entry point of the application.
 func main() {
 	err := parseFlags()
 	if err != nil {
@@ -38,14 +61,7 @@ func main() {
 	}
 }
 
-var (
-	addr            string
-	storeInterval   int
-	fileStoragePath string
-	restore         bool
-	databaseDSN     string
-)
-
+// init initializes the command-line flags.
 func init() {
 	pflag.StringVarP(&addr, "address", "a", "localhost:8080", "server URL")
 	pflag.IntVarP(&storeInterval, "interval", "i", 300, "interval in seconds to save metrics (0 = sync save)")
@@ -54,6 +70,8 @@ func init() {
 	pflag.StringVarP(&databaseDSN, "database-dsn", "d", "", "PostgreSQL DSN connection string")
 }
 
+// parseFlags parses command-line flags and environment variables,
+// overriding flags with environment variables when set.
 func parseFlags() error {
 	pflag.Parse()
 
@@ -95,24 +113,58 @@ func parseFlags() error {
 	return nil
 }
 
+// run initializes and starts the appropriate server based on configuration.
 func run(ctx context.Context) error {
+	ctx, stop := signal.NotifyContext(
+		ctx,
+		os.Interrupt,
+		syscall.SIGTERM,
+		syscall.SIGQUIT,
+	)
+	defer stop()
+
 	parsedAddr := address.New(addr)
+
 	switch parsedAddr.Scheme {
 	case address.SchemeHTTP:
 		if databaseDSN != "" && fileStoragePath != "" {
-			return runDBWithWorkerHTTP(ctx, addr, fileStoragePath, storeInterval, restore, databaseDSN)
+			return runDBWithWorkerHTTP(
+				ctx,
+				addr,
+				fileStoragePath,
+				storeInterval,
+				restore,
+				databaseDSN,
+				migrationsDir,
+			)
+		} else if databaseDSN != "" && fileStoragePath == "" {
+			return runDBHTTP(
+				ctx,
+				addr,
+				databaseDSN,
+				migrationsDir,
+			)
 		} else if databaseDSN == "" && fileStoragePath != "" {
-			return runMemoryWithWorkerHTTP(ctx, addr, fileStoragePath, storeInterval, restore)
+			return runFileWithWorkerHTTP(
+				ctx,
+				addr,
+				fileStoragePath,
+				storeInterval,
+				restore,
+			)
 		} else {
 			return runMemoryHTTP(ctx, addr)
 		}
+
 	case address.SchemeGRPC:
 		return fmt.Errorf("gRPC server not implemented yet: %s", parsedAddr.Address)
+
 	default:
 		return address.ErrUnsupportedScheme
 	}
 }
 
+// runMemoryHTTP runs an HTTP server with in-memory storage only.
 func runMemoryHTTP(
 	ctx context.Context,
 	addr string,
@@ -122,9 +174,6 @@ func runMemoryHTTP(
 	reader := memory.NewMetricReadRepository(data)
 	service := services.NewMetricService(writer, reader)
 
-	ctx, stop := signal.NotifyContext(ctx, os.Interrupt, syscall.SIGTERM, syscall.SIGQUIT)
-	defer stop()
-
 	r := chi.NewRouter()
 	r.Use(httpMiddlewares.LoggingMiddleware)
 	r.Use(httpMiddlewares.GzipMiddleware)
@@ -140,67 +189,25 @@ func runMemoryHTTP(
 		Handler: r,
 	}
 
-	errChan := make(chan error, 1)
-
-	go func() {
-		if err := server.ListenAndServe(); err != nil && err != http.ErrServerClosed {
-			errChan <- err
-		}
-	}()
-
-	select {
-	case <-ctx.Done():
-	case err := <-errChan:
-		return err
-	}
-
-	shutdownCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-	defer cancel()
-
-	return server.Shutdown(shutdownCtx)
+	runner := runner.NewRunner()
+	runner.AddHTTPServer(server)
+	return runner.Run(ctx)
 }
 
-func runMemoryWithWorkerHTTP(
+// runFileWithWorkerHTTP runs an HTTP server using file storage with periodic saving via a worker.
+func runFileWithWorkerHTTP(
 	ctx context.Context,
 	addr string,
 	fileStoragePath string,
 	storeInterval int,
 	restore bool,
 ) error {
-	data := make(map[models.MetricID]models.Metrics)
-	writer := memory.NewMetricWriteRepository(data)
-	reader := memory.NewMetricReadRepository(data)
-	service := services.NewMetricService(writer, reader)
-
-	f, err := os.OpenFile(fileStoragePath, os.O_CREATE, 0644)
-	if err != nil {
+	if _, err := os.OpenFile(fileStoragePath, os.O_CREATE, 0644); err != nil {
 		return err
 	}
-	defer f.Close()
-
-	writerFile := file.NewMetricWriteRepository(fileStoragePath)
-	readerFile := file.NewMetricReadRepository(fileStoragePath)
-
-	ctx, stop := signal.NotifyContext(ctx, os.Interrupt, syscall.SIGTERM, syscall.SIGQUIT)
-	defer stop()
-
-	r := chi.NewRouter()
-	r.Use(httpMiddlewares.LoggingMiddleware)
-	r.Use(httpMiddlewares.GzipMiddleware)
-
-	r.Post("/update/{type}/{name}/{value}", httpHandlers.NewMetricUpdatePathHandler(service))
-	r.Post("/update/", httpHandlers.NewMetricUpdateBodyHandler(service))
-	r.Get("/value/{type}/{id}", httpHandlers.NewMetricGetPathHandler(service))
-	r.Post("/value/", httpHandlers.NewMetricGetBodyHandler(service))
-	r.Get("/", httpHandlers.NewMetricListHTMLHandler(service))
-
-	server := &http.Server{
-		Addr:    addr,
-		Handler: r,
-	}
-
-	errChan := make(chan error, 2)
-	var wg sync.WaitGroup
+	writer := file.NewMetricWriteRepository(fileStoragePath)
+	reader := file.NewMetricReadRepository(fileStoragePath)
+	service := services.NewMetricService(writer, reader)
 
 	var ticker *time.Ticker
 	if storeInterval > 0 {
@@ -208,70 +215,59 @@ func runMemoryWithWorkerHTTP(
 		defer ticker.Stop()
 	}
 
-	if fileStoragePath != "" {
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
-			if err := worker.Run(ctx, restore, ticker, reader, writer, readerFile, writerFile); err != nil {
-				errChan <- err
-			}
-		}()
+	metricWorker := worker.NewMetricWorker(
+		restore,
+		ticker,
+		reader,
+		writer,
+		reader,
+		writer,
+	)
+
+	r := chi.NewRouter()
+	r.Use(httpMiddlewares.LoggingMiddleware)
+	r.Use(httpMiddlewares.GzipMiddleware)
+	r.Post("/update/{type}/{name}/{value}", httpHandlers.NewMetricUpdatePathHandler(service))
+	r.Post("/update/", httpHandlers.NewMetricUpdateBodyHandler(service))
+	r.Get("/value/{type}/{id}", httpHandlers.NewMetricGetPathHandler(service))
+	r.Post("/value/", httpHandlers.NewMetricGetBodyHandler(service))
+	r.Get("/", httpHandlers.NewMetricListHTMLHandler(service))
+
+	server := &http.Server{
+		Addr:    addr,
+		Handler: r,
 	}
 
-	go func() {
-		if err := server.ListenAndServe(); err != nil && err != http.ErrServerClosed {
-			errChan <- err
-		}
-	}()
-
-	select {
-	case <-ctx.Done():
-	case err := <-errChan:
-		return err
-	}
-
-	wg.Wait()
-
-	shutdownCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-	defer cancel()
-
-	return server.Shutdown(shutdownCtx)
+	runner := runner.NewRunner()
+	runner.AddWorker(metricWorker)
+	runner.AddHTTPServer(server)
+	return runner.Run(ctx)
 }
 
-func runDBWithWorkerHTTP(
+// runDBHTTP runs an HTTP server with PostgreSQL DB backend (without worker).
+func runDBHTTP(
 	ctx context.Context,
 	addr string,
-	fileStoragePath string,
-	storeInterval int,
-	restore bool,
 	databaseDSN string,
+	migrationsDir string,
 ) error {
-	db, err := db.New("pgx", databaseDSN,
-		db.WithMaxOpenConns(10),
-		db.WithMaxIdleConns(5),
-		db.WithConnMaxLifetime(30*time.Minute),
-	)
+	db, err := db.New("pgx", databaseDSN)
 	if err != nil {
 		return fmt.Errorf("failed to connect to DB: %w", err)
 	}
 	defer db.Close()
 
-	data := make(map[models.MetricID]models.Metrics)
-	writer := memory.NewMetricWriteRepository(data)
-	reader := memory.NewMetricReadRepository(data)
-	service := services.NewMetricService(writer, reader)
-
-	f, err := os.OpenFile(fileStoragePath, os.O_CREATE, 0644)
-	if err != nil {
-		return err
+	if err := goose.SetDialect("postgres"); err != nil {
+		return fmt.Errorf("failed to set goose dialect: %w", err)
 	}
-	defer f.Close()
 
-	writerFile := file.NewMetricWriteRepository(fileStoragePath)
-	readerFile := file.NewMetricReadRepository(fileStoragePath)
+	if err := goose.Up(db.DB, migrationsDir); err != nil {
+		return fmt.Errorf("failed to apply migrations: %w", err)
+	}
 
-	ctx, stop := signal.NotifyContext(ctx, os.Interrupt, syscall.SIGTERM, syscall.SIGQUIT)
-	defer stop()
+	writer := dbRepo.NewMetricWriteRepository(db)
+	reader := dbRepo.NewMetricReadRepository(db)
+	service := services.NewMetricService(writer, reader)
 
 	r := chi.NewRouter()
 	r.Use(httpMiddlewares.LoggingMiddleware)
@@ -289,8 +285,44 @@ func runDBWithWorkerHTTP(
 		Handler: r,
 	}
 
-	errChan := make(chan error, 2)
-	var wg sync.WaitGroup
+	runner := runner.NewRunner()
+	runner.AddHTTPServer(server)
+	return runner.Run(ctx)
+}
+
+// runDBWithWorkerHTTP runs an HTTP server with PostgreSQL DB backend and file backup with a periodic worker.
+func runDBWithWorkerHTTP(
+	ctx context.Context,
+	addr string,
+	fileStoragePath string,
+	storeInterval int,
+	restore bool,
+	databaseDSN string,
+	migrationsDir string,
+) error {
+	db, err := db.New("pgx", databaseDSN)
+	if err != nil {
+		return fmt.Errorf("failed to connect to DB: %w", err)
+	}
+	defer db.Close()
+
+	if err := goose.SetDialect("postgres"); err != nil {
+		return fmt.Errorf("failed to set goose dialect: %w", err)
+	}
+
+	if err := goose.Up(db.DB, migrationsDir); err != nil {
+		return fmt.Errorf("failed to apply migrations: %w", err)
+	}
+
+	writer := dbRepo.NewMetricWriteRepository(db)
+	reader := dbRepo.NewMetricReadRepository(db)
+	service := services.NewMetricService(writer, reader)
+
+	if _, err := os.OpenFile(fileStoragePath, os.O_CREATE, 0644); err != nil {
+		return err
+	}
+	writerFile := file.NewMetricWriteRepository(fileStoragePath)
+	readerFile := file.NewMetricReadRepository(fileStoragePath)
 
 	var ticker *time.Ticker
 	if storeInterval > 0 {
@@ -298,37 +330,39 @@ func runDBWithWorkerHTTP(
 		defer ticker.Stop()
 	}
 
-	if fileStoragePath != "" {
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
-			if err := worker.Run(ctx, restore, ticker, reader, writer, readerFile, writerFile); err != nil {
-				errChan <- err
-			}
-		}()
+	metricWorker := worker.NewMetricWorker(
+		restore,
+		ticker,
+		reader,
+		writer,
+		readerFile,
+		writerFile,
+	)
+
+	r := chi.NewRouter()
+	r.Use(httpMiddlewares.LoggingMiddleware)
+	r.Use(httpMiddlewares.GzipMiddleware)
+
+	r.Post("/update/{type}/{name}/{value}", httpHandlers.NewMetricUpdatePathHandler(service))
+	r.Post("/update/", httpHandlers.NewMetricUpdateBodyHandler(service))
+	r.Get("/value/{type}/{id}", httpHandlers.NewMetricGetPathHandler(service))
+	r.Post("/value/", httpHandlers.NewMetricGetBodyHandler(service))
+	r.Get("/", httpHandlers.NewMetricListHTMLHandler(service))
+	r.Get("/ping", newDBPingHandler(db))
+
+	server := &http.Server{
+		Addr:    addr,
+		Handler: r,
 	}
 
-	go func() {
-		if err := server.ListenAndServe(); err != nil && err != http.ErrServerClosed {
-			errChan <- err
-		}
-	}()
-
-	select {
-	case <-ctx.Done():
-	case err := <-errChan:
-		return err
-	}
-
-	wg.Wait()
-
-	shutdownCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-	defer cancel()
-
-	return server.Shutdown(shutdownCtx)
+	runner := runner.NewRunner()
+	runner.AddWorker(metricWorker)
+	runner.AddHTTPServer(server)
+	return runner.Run(ctx)
 }
 
-// newDBPingHandler returns an HTTP handler function that checks db connection
+// newDBPingHandler returns an HTTP handler that responds with 200 OK if the DB is reachable,
+// or 500 Internal Server Error if the DB ping fails.
 func newDBPingHandler(db *sqlx.DB) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		if err := db.PingContext(r.Context()); err != nil {

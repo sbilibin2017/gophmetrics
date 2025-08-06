@@ -2,6 +2,7 @@ package services
 
 import (
 	"context"
+	"log"
 
 	"github.com/sbilibin2017/gophmetrics/internal/models"
 )
@@ -68,11 +69,17 @@ func updateCounter(
 		MType: models.Counter,
 	})
 	if err != nil {
+		log.Printf("updateCounter: error retrieving metric with ID %s: %v", metric.ID, err)
 		return nil, err
 	}
 
 	if existing != nil && existing.Delta != nil && metric.Delta != nil {
+		log.Printf("updateCounter: existing Delta = %d, incoming Delta = %d for metric ID %s",
+			*existing.Delta, *metric.Delta, metric.ID)
 		*metric.Delta += *existing.Delta
+		log.Printf("updateCounter: updated Delta = %d for metric ID %s", *metric.Delta, metric.ID)
+	} else {
+		log.Printf("updateCounter: no existing delta to add or incoming delta is nil for metric ID %s", metric.ID)
 	}
 
 	return metric, nil
