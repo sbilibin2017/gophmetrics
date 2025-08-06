@@ -15,6 +15,7 @@ import (
 	"time"
 
 	"github.com/go-chi/chi/v5"
+	"github.com/jmoiron/sqlx"
 	"github.com/sbilibin2017/gophmetrics/internal/configs/address"
 	"github.com/sbilibin2017/gophmetrics/internal/configs/db"
 	httpHandlers "github.com/sbilibin2017/gophmetrics/internal/handlers/http"
@@ -98,14 +99,13 @@ func run(ctx context.Context) error {
 	parsedAddr := address.New(addr)
 	switch parsedAddr.Scheme {
 	case address.SchemeHTTP:
-		if databaseDSN != "" {
-			return runDBHTTP(ctx, addr, fileStoragePath, storeInterval, restore, databaseDSN)
+		if databaseDSN != "" && fileStoragePath != "" {
+			return runDBWithWorkerHTTP(ctx, addr, fileStoragePath, storeInterval, restore, databaseDSN)
+		} else if databaseDSN == "" && fileStoragePath != "" {
+			return runMemoryWithWorkerHTTP(ctx, addr, fileStoragePath, storeInterval, restore)
 		} else {
-			return runMemoryHTTP(ctx, addr, fileStoragePath, storeInterval, restore)
+			return runMemoryHTTP(ctx, addr)
 		}
-
-	case address.SchemeHTTPS:
-		return fmt.Errorf("https server not implemented yet: %s", parsedAddr.Address)
 	case address.SchemeGRPC:
 		return fmt.Errorf("gRPC server not implemented yet: %s", parsedAddr.Address)
 	default:
@@ -114,6 +114,53 @@ func run(ctx context.Context) error {
 }
 
 func runMemoryHTTP(
+	ctx context.Context,
+	addr string,
+) error {
+	data := make(map[models.MetricID]models.Metrics)
+	writer := memory.NewMetricWriteRepository(data)
+	reader := memory.NewMetricReadRepository(data)
+	service := services.NewMetricService(writer, reader)
+
+	ctx, stop := signal.NotifyContext(ctx, os.Interrupt, syscall.SIGTERM, syscall.SIGQUIT)
+	defer stop()
+
+	r := chi.NewRouter()
+	r.Use(httpMiddlewares.LoggingMiddleware)
+	r.Use(httpMiddlewares.GzipMiddleware)
+
+	r.Post("/update/{type}/{name}/{value}", httpHandlers.NewMetricUpdatePathHandler(service))
+	r.Post("/update/", httpHandlers.NewMetricUpdateBodyHandler(service))
+	r.Get("/value/{type}/{id}", httpHandlers.NewMetricGetPathHandler(service))
+	r.Post("/value/", httpHandlers.NewMetricGetBodyHandler(service))
+	r.Get("/", httpHandlers.NewMetricListHTMLHandler(service))
+
+	server := &http.Server{
+		Addr:    addr,
+		Handler: r,
+	}
+
+	errChan := make(chan error, 1)
+
+	go func() {
+		if err := server.ListenAndServe(); err != nil && err != http.ErrServerClosed {
+			errChan <- err
+		}
+	}()
+
+	select {
+	case <-ctx.Done():
+	case err := <-errChan:
+		return err
+	}
+
+	shutdownCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	return server.Shutdown(shutdownCtx)
+}
+
+func runMemoryWithWorkerHTTP(
 	ctx context.Context,
 	addr string,
 	fileStoragePath string,
@@ -125,22 +172,14 @@ func runMemoryHTTP(
 	reader := memory.NewMetricReadRepository(data)
 	service := services.NewMetricService(writer, reader)
 
-	var writerFile *file.MetricWriteRepository
-	var readerFile *file.MetricReadRepository
-	if fileStoragePath != "" {
-		_, err := os.Stat(fileStoragePath)
-		if errors.Is(err, os.ErrNotExist) {
-			f, err := os.Create(fileStoragePath)
-			if err != nil {
-				return fmt.Errorf("failed to create metrics file: %w", err)
-			}
-			f.Close()
-		} else if err != nil {
-			return fmt.Errorf("failed to check metrics file: %w", err)
-		}
-		writerFile = file.NewMetricWriteRepository(fileStoragePath)
-		readerFile = file.NewMetricReadRepository(fileStoragePath)
+	f, err := os.OpenFile(fileStoragePath, os.O_CREATE, 0644)
+	if err != nil {
+		return err
 	}
+	defer f.Close()
+
+	writerFile := file.NewMetricWriteRepository(fileStoragePath)
+	readerFile := file.NewMetricReadRepository(fileStoragePath)
 
 	ctx, stop := signal.NotifyContext(ctx, os.Interrupt, syscall.SIGTERM, syscall.SIGQUIT)
 	defer stop()
@@ -199,7 +238,7 @@ func runMemoryHTTP(
 	return server.Shutdown(shutdownCtx)
 }
 
-func runDBHTTP(
+func runDBWithWorkerHTTP(
 	ctx context.Context,
 	addr string,
 	fileStoragePath string,
@@ -222,22 +261,14 @@ func runDBHTTP(
 	reader := memory.NewMetricReadRepository(data)
 	service := services.NewMetricService(writer, reader)
 
-	var writerFile *file.MetricWriteRepository
-	var readerFile *file.MetricReadRepository
-	if fileStoragePath != "" {
-		_, err := os.Stat(fileStoragePath)
-		if errors.Is(err, os.ErrNotExist) {
-			f, err := os.Create(fileStoragePath)
-			if err != nil {
-				return fmt.Errorf("failed to create metrics file: %w", err)
-			}
-			f.Close()
-		} else if err != nil {
-			return fmt.Errorf("failed to check metrics file: %w", err)
-		}
-		writerFile = file.NewMetricWriteRepository(fileStoragePath)
-		readerFile = file.NewMetricReadRepository(fileStoragePath)
+	f, err := os.OpenFile(fileStoragePath, os.O_CREATE, 0644)
+	if err != nil {
+		return err
 	}
+	defer f.Close()
+
+	writerFile := file.NewMetricWriteRepository(fileStoragePath)
+	readerFile := file.NewMetricReadRepository(fileStoragePath)
 
 	ctx, stop := signal.NotifyContext(ctx, os.Interrupt, syscall.SIGTERM, syscall.SIGQUIT)
 	defer stop()
@@ -251,7 +282,7 @@ func runDBHTTP(
 	r.Get("/value/{type}/{id}", httpHandlers.NewMetricGetPathHandler(service))
 	r.Post("/value/", httpHandlers.NewMetricGetBodyHandler(service))
 	r.Get("/", httpHandlers.NewMetricListHTMLHandler(service))
-	r.Get("/ping", httpHandlers.NewDBPingHandler(db))
+	r.Get("/ping", newDBPingHandler(db))
 
 	server := &http.Server{
 		Addr:    addr,
@@ -295,4 +326,15 @@ func runDBHTTP(
 	defer cancel()
 
 	return server.Shutdown(shutdownCtx)
+}
+
+// newDBPingHandler returns an HTTP handler function that checks db connection
+func newDBPingHandler(db *sqlx.DB) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		if err := db.PingContext(r.Context()); err != nil {
+			w.WriteHeader(http.StatusInternalServerError)
+			return
+		}
+		w.WriteHeader(http.StatusOK)
+	}
 }
