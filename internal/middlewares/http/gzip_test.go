@@ -8,93 +8,120 @@ import (
 	"net/http/httptest"
 	"testing"
 
-	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
 
-func gzipCompress(t *testing.T, data []byte) []byte {
-	var buf bytes.Buffer
-	gzw := gzip.NewWriter(&buf)
-	_, err := gzw.Write(data)
-	assert.NoError(t, err)
-	err = gzw.Close()
-	assert.NoError(t, err)
-	return buf.Bytes()
-}
-
-func TestGzipMiddleware_DecompressRequest(t *testing.T) {
-	// Исходные данные, сжатые gzip
-	originalBody := []byte(`{"foo":"bar"}`)
-	compressedBody := gzipCompress(t, originalBody)
-
-	// Хендлер проверяет что тело запроса распаковано корректно
-	handler := GzipMiddleware(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+func TestGzipMiddleware(t *testing.T) {
+	handler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		body, err := io.ReadAll(r.Body)
-		assert.NoError(t, err)
-		assert.Equal(t, originalBody, body)
-		w.WriteHeader(http.StatusOK)
-	}))
+		require.NoError(t, err)
+		w.Write(body) // Echo request body as response
+	})
 
-	req := httptest.NewRequest(http.MethodPost, "/", bytes.NewReader(compressedBody))
-	req.Header.Set("Content-Encoding", "gzip")
-	w := httptest.NewRecorder()
+	middleware := GzipMiddleware(handler)
 
-	handler.ServeHTTP(w, req)
+	// helper to gzip compress data
+	gzipData := func(t *testing.T, data []byte) []byte {
+		var buf bytes.Buffer
+		gzw := gzip.NewWriter(&buf)
+		_, err := gzw.Write(data)
+		require.NoError(t, err)
+		err = gzw.Close()
+		require.NoError(t, err)
+		return buf.Bytes()
+	}
 
-	resp := w.Result()
-	defer resp.Body.Close() // <--- Fix here
+	tests := []struct {
+		name               string
+		requestBody        []byte
+		contentEncoding    string
+		acceptEncoding     string
+		expectStatus       int
+		expectResponseBody []byte
+		expectGzipResp     bool
+	}{
+		{
+			name:               "plain request, no gzip response",
+			requestBody:        []byte("hello world"),
+			contentEncoding:    "",
+			acceptEncoding:     "",
+			expectStatus:       http.StatusOK,
+			expectResponseBody: []byte("hello world"),
+			expectGzipResp:     false,
+		},
+		{
+			name:               "gzip encoded request, plain response",
+			requestBody:        gzipData(t, []byte("compressed request")),
+			contentEncoding:    "gzip",
+			acceptEncoding:     "",
+			expectStatus:       http.StatusOK,
+			expectResponseBody: []byte("compressed request"),
+			expectGzipResp:     false,
+		},
+		{
+			name:               "plain request, gzip response",
+			requestBody:        []byte("hello gzip response"),
+			contentEncoding:    "",
+			acceptEncoding:     "gzip",
+			expectStatus:       http.StatusOK,
+			expectResponseBody: []byte("hello gzip response"),
+			expectGzipResp:     true,
+		},
+		{
+			name:               "gzip request and gzip response",
+			requestBody:        gzipData(t, []byte("request and response gzip")),
+			contentEncoding:    "gzip",
+			acceptEncoding:     "gzip",
+			expectStatus:       http.StatusOK,
+			expectResponseBody: []byte("request and response gzip"),
+			expectGzipResp:     true,
+		},
+		{
+			name:               "invalid gzip request",
+			requestBody:        []byte("not really gzip"),
+			contentEncoding:    "gzip",
+			acceptEncoding:     "",
+			expectStatus:       http.StatusInternalServerError,
+			expectResponseBody: []byte{}, // <-- fixed here
+			expectGzipResp:     false,
+		},
+	}
 
-	assert.Equal(t, http.StatusOK, resp.StatusCode)
-}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			req := httptest.NewRequest(http.MethodPost, "http://example.com", bytes.NewReader(tt.requestBody))
+			if tt.contentEncoding != "" {
+				req.Header.Set("Content-Encoding", tt.contentEncoding)
+			}
+			if tt.acceptEncoding != "" {
+				req.Header.Set("Accept-Encoding", tt.acceptEncoding)
+			}
 
-func TestGzipMiddleware_CompressResponse(t *testing.T) {
-	// Хендлер, который пишет json
-	handler := GzipMiddleware(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.Header().Set("Content-Type", "application/json")
-		w.Write([]byte(`{"foo":"bar"}`))
-	}))
+			w := httptest.NewRecorder()
+			middleware.ServeHTTP(w, req)
+			resp := w.Result()
+			defer resp.Body.Close()
 
-	req := httptest.NewRequest(http.MethodGet, "/", nil)
-	req.Header.Set("Accept-Encoding", "gzip")
-	w := httptest.NewRecorder()
+			require.Equal(t, tt.expectStatus, resp.StatusCode)
 
-	handler.ServeHTTP(w, req)
+			respBody, err := io.ReadAll(resp.Body)
+			require.NoError(t, err)
 
-	resp := w.Result()
-	defer resp.Body.Close()
+			if tt.expectGzipResp {
+				require.Equal(t, "gzip", resp.Header.Get("Content-Encoding"))
 
-	// Проверяем, что Content-Encoding: gzip выставлен
-	assert.Equal(t, "gzip", resp.Header.Get("Content-Encoding"))
+				// decompress response
+				gzr, err := gzip.NewReader(bytes.NewReader(respBody))
+				require.NoError(t, err)
+				decompressed, err := io.ReadAll(gzr)
+				require.NoError(t, err)
+				require.NoError(t, gzr.Close())
 
-	// Распаковываем тело ответа и проверяем содержимое
-	gr, err := gzip.NewReader(resp.Body)
-	assert.NoError(t, err)
-	defer gr.Close()
-
-	body, err := io.ReadAll(gr)
-	assert.NoError(t, err)
-	assert.Equal(t, `{"foo":"bar"}`, string(body))
-}
-
-func TestGzipMiddleware_NoCompression(t *testing.T) {
-	// Хендлер, который пишет json
-	handler := GzipMiddleware(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.Header().Set("Content-Type", "application/json")
-		w.Write([]byte(`{"foo":"bar"}`))
-	}))
-
-	req := httptest.NewRequest(http.MethodGet, "/", nil)
-	// Без Accept-Encoding gzip
-	w := httptest.NewRecorder()
-
-	handler.ServeHTTP(w, req)
-
-	resp := w.Result()
-	defer resp.Body.Close()
-
-	// Content-Encoding не должен быть gzip
-	assert.NotEqual(t, "gzip", resp.Header.Get("Content-Encoding"))
-
-	body, err := io.ReadAll(resp.Body)
-	assert.NoError(t, err)
-	assert.Equal(t, `{"foo":"bar"}`, string(body))
+				require.Equal(t, tt.expectResponseBody, decompressed)
+			} else {
+				require.Equal(t, "", resp.Header.Get("Content-Encoding"))
+				require.Equal(t, tt.expectResponseBody, respBody)
+			}
+		})
+	}
 }

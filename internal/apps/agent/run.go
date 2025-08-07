@@ -7,8 +7,8 @@ import (
 	"syscall"
 	"time"
 
+	httpFacades "github.com/sbilibin2017/gophmetrics/internal/apps/agent/facades/http"
 	httpClient "github.com/sbilibin2017/gophmetrics/internal/configs/transport/http"
-	httpFacades "github.com/sbilibin2017/gophmetrics/internal/facades/http"
 )
 
 // runHTTP runs the agent using HTTP transport.
@@ -26,7 +26,7 @@ func RunHTTP(ctx context.Context, config *Config) error {
 		),
 	)
 
-	updater := httpFacades.NewMetricHTTPFacade(client)
+	updater := httpFacades.NewMetricHTTPFacade(client, config.Key)
 
 	pollTicker := time.NewTicker(time.Duration(config.PollInterval) * time.Second)
 	defer pollTicker.Stop()
