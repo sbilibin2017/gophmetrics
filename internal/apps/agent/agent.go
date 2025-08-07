@@ -16,34 +16,15 @@ type Updater interface {
 	Update(ctx context.Context, metrics []*models.Metrics) error
 }
 
-// MetricAgent collects runtime metrics periodically and reports them using an Updater.
-type MetricAgent struct {
-	updater      Updater      // Updater interface to send metrics
-	pollTicker   *time.Ticker // ticker controlling metrics collection frequency
-	reportTicker *time.Ticker // ticker controlling metrics reporting frequency
-}
-
-// NewMetricAgent creates a new MetricAgent with the provided updater and tickers.
-// pollTicker controls how often metrics are collected.
-// reportTicker controls how often collected metrics are sent.
-func NewMetricAgent(
+// runMetricAgent runs metric agent.
+func runMetricAgent(
+	ctx context.Context,
 	updater Updater,
 	pollTicker *time.Ticker,
 	reportTicker *time.Ticker,
-) *MetricAgent {
-	return &MetricAgent{
-		updater:      updater,
-		pollTicker:   pollTicker,
-		reportTicker: reportTicker,
-	}
-}
-
-// Start runs the metric agent until the given context is done.
-// It spawns a generator goroutine that collects metrics on pollTicker ticks,
-// and a sender that batches and sends metrics on reportTicker ticks.
-func (ma *MetricAgent) Start(ctx context.Context) error {
-	metricsCh := generator(ctx, ma.pollTicker)
-	return sender(ctx, ma.reportTicker, ma.updater, metricsCh)
+) error {
+	metricsCh := generator(ctx, pollTicker)
+	return sender(ctx, reportTicker, updater, metricsCh)
 }
 
 // generator collects runtime and custom metrics on each tick of pollTicker.

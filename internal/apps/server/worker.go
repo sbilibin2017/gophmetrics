@@ -1,4 +1,4 @@
-package worker
+package server
 
 import (
 	"context"
@@ -35,68 +35,40 @@ type CurrentReader interface {
 	List(ctx context.Context) ([]*models.Metrics, error)
 }
 
-// MetricWorker is responsible for periodically storing in-memory metrics
-// to a persistent file and optionally restoring metrics from the file on start.
-type MetricWorker struct {
-	restore       bool          // whether to restore metrics from the file on start
-	storeTicker   *time.Ticker  // ticker for periodic storing, or nil for storing only on shutdown
-	currentReader CurrentReader // interface to read current in-memory metrics
-	currentWriter CurrentWriter // interface to write current in-memory metrics
-	fileReader    FileReader    // interface to read metrics from persistent file
-	fileWriter    FileWriter    // interface to write metrics to persistent file
-}
-
-// NewMetricWorker creates a new MetricWorker with the given configuration.
-// The storeTicker controls how often metrics are saved to the file. If nil,
-// metrics are saved only when the context is cancelled (e.g., on shutdown).
-// If restore is true, metrics are loaded from the file on start.
-func NewMetricWorker(
+// runMetricWorker runs worker.
+func runMetricWorker(
+	ctx context.Context,
 	restore bool,
 	storeTicker *time.Ticker,
 	currentReader CurrentReader,
 	currentWriter CurrentWriter,
 	fileReader FileReader,
 	fileWriter FileWriter,
-) *MetricWorker {
-	return &MetricWorker{
-		restore:       restore,
-		storeTicker:   storeTicker,
-		currentReader: currentReader,
-		currentWriter: currentWriter,
-		fileReader:    fileReader,
-		fileWriter:    fileWriter,
-	}
-}
-
-// Start runs the metric worker until the given context is done.
-// If restore is enabled, metrics are loaded from the file on start.
-// Periodically, based on the storeTicker, all in-memory metrics are saved to the file.
-// When the context is cancelled, all metrics are saved once more before returning.
-func (mw *MetricWorker) Start(ctx context.Context) error {
-	if mw.restore {
-		savedMetrics, err := mw.fileReader.List(ctx)
+) error {
+	if restore {
+		savedMetrics, err := fileReader.List(ctx)
 		if err != nil {
 			return err
 		}
 		for _, metric := range savedMetrics {
-			if err := mw.currentWriter.Save(ctx, metric); err != nil {
+			if err := currentWriter.Save(ctx, metric); err != nil {
 				return err
 			}
 		}
 	}
 
-	if mw.storeTicker == nil {
+	if storeTicker == nil {
 		<-ctx.Done()
-		return saveAllMetrics(ctx, mw.currentReader, mw.fileWriter)
+		return saveAllMetrics(ctx, currentReader, fileWriter)
 	}
 
 	for {
 		select {
 		case <-ctx.Done():
-			return saveAllMetrics(ctx, mw.currentReader, mw.fileWriter)
+			return saveAllMetrics(ctx, currentReader, fileWriter)
 
-		case <-mw.storeTicker.C:
-			if err := saveAllMetrics(ctx, mw.currentReader, mw.fileWriter); err != nil {
+		case <-storeTicker.C:
+			if err := saveAllMetrics(ctx, currentReader, fileWriter); err != nil {
 				return err
 			}
 		}

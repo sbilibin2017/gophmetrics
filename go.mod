@@ -3,6 +3,7 @@ module github.com/sbilibin2017/gophmetrics
 go 1.24.4
 
 require (
+	github.com/DATA-DOG/go-sqlmock v1.5.2
 	github.com/go-chi/chi/v5 v5.2.2
 	github.com/go-resty/resty/v2 v2.16.5
 	github.com/golang/mock v1.6.0

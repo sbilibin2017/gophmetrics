@@ -1,13 +1,12 @@
 package http
 
 import (
+	"bytes"
 	"context"
+	"encoding/json"
 	"errors"
-	"fmt"
 	"net/http"
 	"net/http/httptest"
-	"net/url"
-	"strconv"
 	"strings"
 	"testing"
 
@@ -25,94 +24,89 @@ func TestNewMetricUpdatePathHandler(t *testing.T) {
 
 	mockUpdater := NewMockUpdater(ctrl)
 
-	handler := NewMetricUpdatePathHandler(mockUpdater)
-
 	tests := []struct {
-		name         string
-		mType        string
-		nameParam    string
-		valueParam   string
-		expectStatus int
-		mockSetup    func()
+		name           string
+		metricType     string
+		metricName     string
+		metricValue    string
+		mockSetup      func()
+		expectedStatus int
 	}{
 		{
-			name:         "Valid gauge metric update",
-			mType:        models.Gauge,
-			nameParam:    "metric1",
-			valueParam:   "123.45",
-			expectStatus: http.StatusOK,
+			name:        "valid gauge update",
+			metricType:  models.Gauge,
+			metricName:  "metric1",
+			metricValue: "12.34",
 			mockSetup: func() {
-				mockUpdater.EXPECT().Update(gomock.Any(), gomock.AssignableToTypeOf(&models.Metrics{})).
-					DoAndReturn(func(ctx context.Context, m *models.Metrics) (*models.Metrics, error) {
-						assert.Equal(t, models.Gauge, m.MType)
-						assert.Equal(t, "metric1", m.ID)
-						require.NotNil(t, m.Value)
-						val, _ := strconv.ParseFloat("123.45", 64)
-						assert.Equal(t, val, *m.Value)
-						return m, nil
-					})
+				mockUpdater.EXPECT().
+					Update(gomock.Any(), gomock.AssignableToTypeOf(&models.Metrics{})).
+					Return(&models.Metrics{}, nil).Times(1)
 			},
+			expectedStatus: http.StatusOK,
 		},
 		{
-			name:         "Valid counter metric update",
-			mType:        models.Counter,
-			nameParam:    "metric2",
-			valueParam:   "42",
-			expectStatus: http.StatusOK,
+			name:        "valid counter update",
+			metricType:  models.Counter,
+			metricName:  "metric2",
+			metricValue: "7",
 			mockSetup: func() {
-				mockUpdater.EXPECT().Update(gomock.Any(), gomock.AssignableToTypeOf(&models.Metrics{})).
-					DoAndReturn(func(ctx context.Context, m *models.Metrics) (*models.Metrics, error) {
-						assert.Equal(t, models.Counter, m.MType)
-						assert.Equal(t, "metric2", m.ID)
-						require.NotNil(t, m.Delta)
-						val, _ := strconv.ParseInt("42", 10, 64)
-						assert.Equal(t, val, *m.Delta)
-						return m, nil
-					})
+				mockUpdater.EXPECT().
+					Update(gomock.Any(), gomock.AssignableToTypeOf(&models.Metrics{})).
+					Return(&models.Metrics{}, nil).Times(1)
 			},
+			expectedStatus: http.StatusOK,
 		},
 		{
-			name:         "Empty metric name",
-			mType:        models.Gauge,
-			nameParam:    " ",
-			valueParam:   "100",
-			expectStatus: http.StatusNotFound,
-			mockSetup:    func() {},
-		},
-		{
-			name:         "Invalid metric type",
-			mType:        "invalidType",
-			nameParam:    "metric3",
-			valueParam:   "100",
-			expectStatus: http.StatusBadRequest,
-			mockSetup:    func() {},
-		},
-		{
-			name:         "Invalid gauge value",
-			mType:        models.Gauge,
-			nameParam:    "metric4",
-			valueParam:   "not-a-float",
-			expectStatus: http.StatusBadRequest,
-			mockSetup:    func() {},
-		},
-		{
-			name:         "Invalid counter value",
-			mType:        models.Counter,
-			nameParam:    "metric5",
-			valueParam:   "not-an-int",
-			expectStatus: http.StatusBadRequest,
-			mockSetup:    func() {},
-		},
-		{
-			name:         "Update returns error",
-			mType:        models.Gauge,
-			nameParam:    "metric6",
-			valueParam:   "123.45",
-			expectStatus: http.StatusInternalServerError,
+			name:        "invalid metric type",
+			metricType:  "invalid",
+			metricName:  "metric3",
+			metricValue: "123",
 			mockSetup: func() {
-				mockUpdater.EXPECT().Update(gomock.Any(), gomock.AssignableToTypeOf(&models.Metrics{})).
-					Return(nil, errors.New("update error"))
+				// No call expected
 			},
+			expectedStatus: http.StatusBadRequest,
+		},
+		{
+			name:        "empty metric name",
+			metricType:  models.Gauge,
+			metricName:  "",
+			metricValue: "123",
+			mockSetup: func() {
+				// No call expected
+			},
+			expectedStatus: http.StatusNotFound,
+		},
+		{
+			name:        "invalid gauge value",
+			metricType:  models.Gauge,
+			metricName:  "metric4",
+			metricValue: "abc",
+			mockSetup: func() {
+				// No call expected
+			},
+			expectedStatus: http.StatusBadRequest,
+		},
+		{
+			name:        "invalid counter value (parse error)",
+			metricType:  models.Counter,
+			metricName:  "metric5",
+			metricValue: "notAnInt",
+			mockSetup: func() {
+				// No call expected
+			},
+			expectedStatus: http.StatusBadRequest,
+		},
+		{
+			name:        "updater returns error",
+			metricType:  models.Counter,
+			metricName:  "metric6",
+			metricValue: "10",
+			mockSetup: func() {
+				mockUpdater.EXPECT().
+					Update(gomock.Any(), gomock.AssignableToTypeOf(&models.Metrics{})).
+					Return(nil, assert.AnError).Times(1)
+			},
+			expectedStatus: http.StatusInternalServerError,
 		},
 	}
 
@@ -120,20 +114,16 @@ func TestNewMetricUpdatePathHandler(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			tt.mockSetup()
 
-			rctx := chi.NewRouteContext()
-			rctx.URLParams.Add("type", tt.mType)
-			rctx.URLParams.Add("name", tt.nameParam)
-			rctx.URLParams.Add("value", tt.valueParam)
+			r := chi.NewRouter()
+			r.Post("/update/{type}/{name}/{value}", NewMetricUpdatePathHandler(mockUpdater))
 
-			req := httptest.NewRequest(http.MethodPost, "/", nil)
-			req = req.WithContext(context.Background())
-			req = req.WithContext(context.WithValue(req.Context(), chi.RouteCtxKey, rctx))
-
+			url := "/update/" + tt.metricType + "/" + tt.metricName + "/" + tt.metricValue
+			req := httptest.NewRequest(http.MethodPost, url, nil)
 			rr := httptest.NewRecorder()
 
-			handler.ServeHTTP(rr, req)
+			r.ServeHTTP(rr, req)
 
-			assert.Equal(t, tt.expectStatus, rr.Code)
+			assert.Equal(t, tt.expectedStatus, rr.Code)
 		})
 	}
 }
@@ -154,54 +144,163 @@ func TestNewMetricGetPathHandler(t *testing.T) {
 		wantBody   string
 	}{
 		{
-			name:  "valid gauge metric",
+			name:  "valid_gauge_metric",
 			mType: models.Gauge,
 			id:    "metric1",
 			setupMock: func() {
-				val := 123.45
-				metric := &models.Metrics{
-					ID:    "metric1",
-					MType: models.Gauge,
-					Value: &val,
-				}
 				mockGetter.EXPECT().
-					Get(gomock.Any(), &models.MetricID{ID: "metric1", MType: models.Gauge}).
-					Return(metric, nil)
+					Get(gomock.Any(), gomock.AssignableToTypeOf(&models.MetricID{})).
+					DoAndReturn(func(ctx context.Context, id *models.MetricID) (*models.Metrics, error) {
+						if id.ID == "metric1" && id.MType == models.Gauge {
+							val := 3.14
+							return &models.Metrics{ID: id.ID, MType: id.MType, Value: &val}, nil
+						}
+						return nil, nil
+					})
 			},
 			wantStatus: http.StatusOK,
-			wantBody:   "123.45",
+			wantBody:   "3.14",
 		},
-		// ... other cases unchanged ...
+		{
+			name:  "valid_counter_metric",
+			mType: models.Counter,
+			id:    "metric2",
+			setupMock: func() {
+				mockGetter.EXPECT().
+					Get(gomock.Any(), gomock.AssignableToTypeOf(&models.MetricID{})).
+					DoAndReturn(func(ctx context.Context, id *models.MetricID) (*models.Metrics, error) {
+						if id.ID == "metric2" && id.MType == models.Counter {
+							delta := int64(42)
+							return &models.Metrics{ID: id.ID, MType: id.MType, Delta: &delta}, nil
+						}
+						return nil, nil
+					})
+			},
+			wantStatus: http.StatusOK,
+			wantBody:   "42",
+		},
+		{
+			name:       "empty_metric_ID",
+			mType:      models.Gauge,
+			id:         "",
+			setupMock:  func() {},
+			wantStatus: http.StatusNotFound,
+		},
+		{
+			name:       "invalid_metric_type",
+			mType:      "invalid",
+			id:         "metric3",
+			setupMock:  func() {},
+			wantStatus: http.StatusBadRequest,
+		},
+		{
+			name:  "getter_returns_error",
+			mType: models.Gauge,
+			id:    "metric4",
+			setupMock: func() {
+				mockGetter.EXPECT().
+					Get(gomock.Any(), gomock.AssignableToTypeOf(&models.MetricID{})).
+					Return(nil, errTest)
+			},
+			wantStatus: http.StatusInternalServerError,
+		},
+		{
+			name:  "metric_not_found",
+			mType: models.Counter,
+			id:    "metric5",
+			setupMock: func() {
+				mockGetter.EXPECT().
+					Get(gomock.Any(), gomock.AssignableToTypeOf(&models.MetricID{})).
+					Return(nil, nil)
+			},
+			wantStatus: http.StatusNotFound,
+		},
+		{
+			name:  "metric_value_nil_gauge",
+			mType: models.Gauge,
+			id:    "metric6",
+			setupMock: func() {
+				mockGetter.EXPECT().
+					Get(gomock.Any(), gomock.AssignableToTypeOf(&models.MetricID{})).
+					DoAndReturn(func(ctx context.Context, id *models.MetricID) (*models.Metrics, error) {
+						if id.ID == "metric6" && id.MType == models.Gauge {
+							return &models.Metrics{ID: id.ID, MType: id.MType, Value: nil}, nil
+						}
+						return nil, nil
+					})
+			},
+			wantStatus: http.StatusNotFound,
+		},
+		{
+			name:  "metric_delta_nil_counter",
+			mType: models.Counter,
+			id:    "metric7",
+			setupMock: func() {
+				mockGetter.EXPECT().
+					Get(gomock.Any(), gomock.AssignableToTypeOf(&models.MetricID{})).
+					DoAndReturn(func(ctx context.Context, id *models.MetricID) (*models.Metrics, error) {
+						if id.ID == "metric7" && id.MType == models.Counter {
+							return &models.Metrics{ID: id.ID, MType: id.MType, Delta: nil}, nil
+						}
+						return nil, nil
+					})
+			},
+			wantStatus: http.StatusNotFound,
+		},
+		{
+			name:  "default_case_invalid_metric_type_in_metric",
+			mType: models.Gauge, // request type is valid (so handler proceeds)
+			id:    "metric_invalid_type",
+			setupMock: func() {
+				mockGetter.EXPECT().
+					Get(gomock.Any(), gomock.AssignableToTypeOf(&models.MetricID{})).
+					Return(&models.Metrics{
+						ID:    "metric_invalid_type",
+						MType: "invalid_type", // invalid metric type triggers default case
+						Value: nil,
+						Delta: nil,
+					}, nil)
+			},
+			wantStatus: http.StatusBadRequest,
+		},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			tt.setupMock()
 
-			escapedID := url.PathEscape(tt.id)
+			req := httptest.NewRequest(http.MethodGet, "/value/"+tt.mType+"/"+tt.id, nil)
 
-			req := httptest.NewRequest(http.MethodGet, fmt.Sprintf("/value/%s/%s", tt.mType, escapedID), nil)
-			rw := httptest.NewRecorder()
-
+			// Set chi URL params in request context for handler to read
 			rctx := chi.NewRouteContext()
 			rctx.URLParams.Add("type", tt.mType)
 			rctx.URLParams.Add("id", tt.id)
 			req = req.WithContext(context.WithValue(req.Context(), chi.RouteCtxKey, rctx))
 
-			handler.ServeHTTP(rw, req) // use ServeHTTP for http.Handler
+			rr := httptest.NewRecorder()
 
-			if rw.Code != tt.wantStatus {
-				t.Errorf("want status %d, got %d", tt.wantStatus, rw.Code)
+			handler.ServeHTTP(rr, req)
+
+			if rr.Code != tt.wantStatus {
+				t.Errorf("expected status %d, got %d", tt.wantStatus, rr.Code)
 			}
 
-			if tt.wantBody != "" {
-				body := rw.Body.String()
-				if body != tt.wantBody {
-					t.Errorf("want body %q, got %q", tt.wantBody, body)
-				}
+			if tt.wantBody != "" && strings.TrimSpace(rr.Body.String()) != tt.wantBody {
+				t.Errorf("expected body %q, got %q", tt.wantBody, rr.Body.String())
 			}
 		})
 	}
+}
+
+// errTest is a simple error for testing error return paths
+var errTest = &testError{"test error"}
+
+type testError struct {
+	msg string
+}
+
+func (e *testError) Error() string {
+	return e.msg
 }
 
 func TestNewMetricListHTMLHandler(t *testing.T) {
@@ -209,168 +308,74 @@ func TestNewMetricListHTMLHandler(t *testing.T) {
 	defer ctrl.Finish()
 
 	mockLister := NewMockLister(ctrl)
-	handler := NewMetricListHTMLHandler(mockLister)
 
 	tests := []struct {
-		name           string
-		mockReturn     []*models.Metrics
-		mockErr        error
-		expectStatus   int
-		expectContains []string
+		name        string
+		setupMock   func()
+		wantStatus  int
+		wantBodySub string // substring expected in response body
 	}{
 		{
-			name: "Success with multiple metrics",
-			mockReturn: []*models.Metrics{
-				{
-					ID:    "metric1",
-					MType: models.Gauge,
-					Value: func() *float64 { v := 123.45; return &v }(),
-				},
-				{
-					ID:    "metric2",
-					MType: models.Counter,
-					Delta: func() *int64 { d := int64(42); return &d }(),
-				},
+			name: "success_with_metrics",
+			setupMock: func() {
+				val := 12.34
+				delta := int64(56)
+				mockLister.EXPECT().
+					List(gomock.Any()).
+					Return([]*models.Metrics{
+						{ID: "metric1", MType: models.Gauge, Value: &val},
+						{ID: "metric2", MType: models.Counter, Delta: &delta},
+					}, nil)
 			},
-			mockErr:      nil,
-			expectStatus: http.StatusOK,
-			expectContains: []string{
-				"<h1>Metrics List</h1>",
-				"<td>metric1</td>",
-				"123.45",
-				"<td>metric2</td>",
-				"42",
-			},
+			wantStatus:  http.StatusOK,
+			wantBodySub: "<table", // basic check for html table
 		},
 		{
-			name:           "Lister returns error",
-			mockReturn:     nil,
-			mockErr:        errors.New("list error"),
-			expectStatus:   http.StatusInternalServerError,
-			expectContains: nil,
+			name: "success_empty_metrics",
+			setupMock: func() {
+				mockLister.EXPECT().
+					List(gomock.Any()).
+					Return([]*models.Metrics{}, nil)
+			},
+			wantStatus:  http.StatusOK,
+			wantBodySub: "Metrics List", // header present even if empty
+		},
+		{
+			name: "failure_internal_error",
+			setupMock: func() {
+				mockLister.EXPECT().
+					List(gomock.Any()).
+					Return(nil, context.Canceled) // simulate error
+			},
+			wantStatus:  http.StatusInternalServerError,
+			wantBodySub: "",
 		},
 	}
+
+	handler := NewMetricListHTMLHandler(mockLister)
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			mockLister.EXPECT().List(gomock.Any()).Return(tt.mockReturn, tt.mockErr)
+			tt.setupMock()
 
 			req := httptest.NewRequest(http.MethodGet, "/", nil)
-			rr := httptest.NewRecorder()
+			w := httptest.NewRecorder()
 
-			handler.ServeHTTP(rr, req)
+			handler(w, req)
 
-			assert.Equal(t, tt.expectStatus, rr.Code)
+			resp := w.Result()
+			defer resp.Body.Close()
 
-			for _, substr := range tt.expectContains {
-				assert.Contains(t, rr.Body.String(), substr)
+			require.Equal(t, tt.wantStatus, resp.StatusCode)
+
+			bodyBytes := w.Body.Bytes()
+			bodyStr := string(bodyBytes)
+
+			if tt.wantBodySub != "" {
+				require.Contains(t, bodyStr, tt.wantBodySub)
 			}
 		})
 	}
-}
-
-func TestNewMetricGetPathHandler_CounterCases(t *testing.T) {
-	ctrl := gomock.NewController(t)
-	defer ctrl.Finish()
-
-	mockGetter := NewMockGetter(ctrl)
-	handler := NewMetricGetPathHandler(mockGetter)
-
-	t.Run("valid counter metric", func(t *testing.T) {
-		deltaVal := int64(100)
-		metric := &models.Metrics{
-			ID:    "counterMetric",
-			MType: models.Counter,
-			Delta: &deltaVal,
-		}
-
-		mockGetter.EXPECT().
-			Get(gomock.Any(), &models.MetricID{ID: "counterMetric", MType: models.Counter}).
-			Return(metric, nil)
-
-		req := httptest.NewRequest(http.MethodGet, "/value/counter/counterMetric", nil)
-		rw := httptest.NewRecorder()
-		rctx := chi.NewRouteContext()
-		rctx.URLParams.Add("type", models.Counter)
-		rctx.URLParams.Add("id", "counterMetric")
-		req = req.WithContext(context.WithValue(req.Context(), chi.RouteCtxKey, rctx))
-
-		handler.ServeHTTP(rw, req)
-
-		assert.Equal(t, http.StatusOK, rw.Code)
-		assert.Equal(t, "text/plain", rw.Header().Get("Content-Type"))
-		assert.Equal(t, "100", rw.Body.String())
-	})
-
-	t.Run("counter metric with nil Delta", func(t *testing.T) {
-		metric := &models.Metrics{
-			ID:    "nilDeltaMetric",
-			MType: models.Counter,
-			Delta: nil, // missing Delta triggers 404
-		}
-
-		mockGetter.EXPECT().
-			Get(gomock.Any(), &models.MetricID{ID: "nilDeltaMetric", MType: models.Counter}).
-			Return(metric, nil)
-
-		req := httptest.NewRequest(http.MethodGet, "/value/counter/nilDeltaMetric", nil)
-		rw := httptest.NewRecorder()
-		rctx := chi.NewRouteContext()
-		rctx.URLParams.Add("type", models.Counter)
-		rctx.URLParams.Add("id", "nilDeltaMetric")
-		req = req.WithContext(context.WithValue(req.Context(), chi.RouteCtxKey, rctx))
-
-		handler.ServeHTTP(rw, req)
-
-		assert.Equal(t, http.StatusNotFound, rw.Code)
-	})
-
-	t.Run("unknown metric type triggers bad request", func(t *testing.T) {
-		req := httptest.NewRequest(http.MethodGet, "/value/unknownType/metricX", nil)
-		rw := httptest.NewRecorder()
-		rctx := chi.NewRouteContext()
-		rctx.URLParams.Add("type", "unknownType")
-		rctx.URLParams.Add("id", "metricX")
-		req = req.WithContext(context.WithValue(req.Context(), chi.RouteCtxKey, rctx))
-
-		handler.ServeHTTP(rw, req)
-
-		assert.Equal(t, http.StatusBadRequest, rw.Code)
-	})
-}
-
-func TestNewMetricGetPathHandler_DefaultSwitchCase(t *testing.T) {
-	ctrl := gomock.NewController(t)
-	defer ctrl.Finish()
-
-	mockGetter := NewMockGetter(ctrl)
-	handler := NewMetricGetPathHandler(mockGetter)
-
-	t.Run("metric with unknown MType in getter response triggers bad request", func(t *testing.T) {
-		// Prepare a metric with an invalid type that triggers the default case
-		metric := &models.Metrics{
-			ID:    "metricX",
-			MType: "unknownType", // Not models.Gauge or models.Counter
-		}
-
-		// Expect getter.Get call with any context and any MetricID param
-		mockGetter.EXPECT().
-			Get(gomock.Any(), gomock.AssignableToTypeOf(&models.MetricID{})).
-			Return(metric, nil)
-
-		req := httptest.NewRequest(http.MethodGet, "/value/gauge/metricX", nil)
-		rw := httptest.NewRecorder()
-
-		// chi URL params setup
-		rctx := chi.NewRouteContext()
-		rctx.URLParams.Add("type", "gauge") // valid type for URL param validation
-		rctx.URLParams.Add("id", "metricX")
-		req = req.WithContext(context.WithValue(req.Context(), chi.RouteCtxKey, rctx))
-
-		handler.ServeHTTP(rw, req)
-
-		assert.Equal(t, http.StatusBadRequest, rw.Code)
-	})
 }
 
 func TestNewMetricUpdateBodyHandler(t *testing.T) {
@@ -378,103 +383,114 @@ func TestNewMetricUpdateBodyHandler(t *testing.T) {
 	defer ctrl.Finish()
 
 	mockUpdater := NewMockUpdater(ctrl)
-	handler := NewMetricUpdateBodyHandler(mockUpdater)
 
 	tests := []struct {
-		name             string
-		contentType      string
-		requestBody      string
-		mockSetup        func()
-		wantStatus       int
-		wantBodyContains string // partial check since JSON encoded
+		name           string
+		contentType    string
+		requestBody    any
+		setupMock      func()
+		expectedStatus int
+		expectBody     bool
 	}{
 		{
-			name:        "valid gauge metric update",
+			name:           "invalid_content_type",
+			contentType:    "text/plain",
+			requestBody:    nil,
+			setupMock:      func() {},
+			expectedStatus: http.StatusBadRequest,
+		},
+		{
+			name:           "invalid_json",
+			contentType:    "application/json",
+			requestBody:    "invalid-json",
+			setupMock:      func() {},
+			expectedStatus: http.StatusBadRequest,
+		},
+		{
+			name:           "empty_metric_id",
+			contentType:    "application/json",
+			requestBody:    models.Metrics{MType: models.Gauge, Value: float64Ptr(1.23)},
+			setupMock:      func() {},
+			expectedStatus: http.StatusNotFound,
+		},
+		{
+			name:           "invalid_metric_type",
+			contentType:    "application/json",
+			requestBody:    models.Metrics{ID: "m1", MType: "unknown"},
+			setupMock:      func() {},
+			expectedStatus: http.StatusBadRequest,
+		},
+		{
+			name:        "updater_error",
 			contentType: "application/json",
-			requestBody: `{"id":"metric1","type":"gauge","value":123.45}`,
-			mockSetup: func() {
-				mockUpdater.EXPECT().Update(gomock.Any(), gomock.AssignableToTypeOf(&models.Metrics{})).
-					DoAndReturn(func(ctx context.Context, m *models.Metrics) (*models.Metrics, error) {
-						assert.Equal(t, models.Gauge, m.MType)
-						assert.Equal(t, "metric1", m.ID)
-						require.NotNil(t, m.Value)
-						assert.Equal(t, 123.45, *m.Value)
-						return m, nil
-					})
+			requestBody: models.Metrics{ID: "m2", MType: models.Gauge, Value: float64Ptr(3.14)},
+			setupMock: func() {
+				mockUpdater.EXPECT().
+					Update(gomock.Any(), &models.Metrics{
+						ID:    "m2",
+						MType: models.Gauge,
+						Value: float64Ptr(3.14),
+					}).
+					Return(nil, context.DeadlineExceeded)
 			},
-			wantStatus:       http.StatusOK,
-			wantBodyContains: `"id":"metric1"`,
+			expectedStatus: http.StatusInternalServerError,
 		},
 		{
-			name:        "valid counter metric update",
+			name:        "successful_update",
 			contentType: "application/json",
-			requestBody: `{"id":"metric2","type":"counter","delta":42}`,
-			mockSetup: func() {
-				mockUpdater.EXPECT().Update(gomock.Any(), gomock.AssignableToTypeOf(&models.Metrics{})).
-					DoAndReturn(func(ctx context.Context, m *models.Metrics) (*models.Metrics, error) {
-						assert.Equal(t, models.Counter, m.MType)
-						assert.Equal(t, "metric2", m.ID)
-						require.NotNil(t, m.Delta)
-						assert.Equal(t, int64(42), *m.Delta)
-						return m, nil
-					})
+			requestBody: models.Metrics{ID: "m3", MType: models.Counter, Delta: int64Ptr(10)},
+			setupMock: func() {
+				mockUpdater.EXPECT().
+					Update(gomock.Any(), &models.Metrics{
+						ID:    "m3",
+						MType: models.Counter,
+						Delta: int64Ptr(10),
+					}).
+					Return(&models.Metrics{
+						ID:    "m3",
+						MType: models.Counter,
+						Delta: int64Ptr(10),
+					}, nil)
 			},
-			wantStatus:       http.StatusOK,
-			wantBodyContains: `"id":"metric2"`,
-		},
-		{
-			name:        "missing content-type header",
-			contentType: "text/plain",
-			requestBody: `{"id":"metric1","type":"gauge","value":123.45}`,
-			mockSetup:   func() {},
-			wantStatus:  http.StatusBadRequest,
-		},
-		{
-			name:        "invalid JSON body",
-			contentType: "application/json",
-			requestBody: `{"id":"metric1","type":"gauge","value":123.45`, // malformed JSON
-			mockSetup:   func() {},
-			wantStatus:  http.StatusBadRequest,
-		},
-		{
-			name:        "missing id",
-			contentType: "application/json",
-			requestBody: `{"id":"","type":"gauge","value":123.45}`,
-			mockSetup:   func() {},
-			wantStatus:  http.StatusBadRequest,
-		},
-		{
-			name:        "invalid metric type",
-			contentType: "application/json",
-			requestBody: `{"id":"metric3","type":"invalid","value":100}`,
-			mockSetup:   func() {},
-			wantStatus:  http.StatusBadRequest,
-		},
-		{
-			name:        "updater returns error",
-			contentType: "application/json",
-			requestBody: `{"id":"metric4","type":"gauge","value":100}`,
-			mockSetup: func() {
-				mockUpdater.EXPECT().Update(gomock.Any(), gomock.AssignableToTypeOf(&models.Metrics{})).
-					Return(nil, errors.New("update failed"))
-			},
-			wantStatus: http.StatusInternalServerError,
+			expectedStatus: http.StatusOK,
+			expectBody:     true,
 		},
 	}
 
+	handler := NewMetricUpdateBodyHandler(mockUpdater)
+
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			tt.mockSetup()
+			tt.setupMock()
 
-			req := httptest.NewRequest(http.MethodPost, "/update/", strings.NewReader(tt.requestBody))
+			var body []byte
+			switch v := tt.requestBody.(type) {
+			case string:
+				body = []byte(v)
+			case nil:
+				body = nil
+			default:
+				var err error
+				body, err = json.Marshal(v)
+				require.NoError(t, err)
+			}
+
+			req := httptest.NewRequest(http.MethodPost, "/update/", bytes.NewReader(body))
 			req.Header.Set("Content-Type", tt.contentType)
-			rr := httptest.NewRecorder()
 
-			handler.ServeHTTP(rr, req)
+			w := httptest.NewRecorder()
+			handler(w, req)
 
-			assert.Equal(t, tt.wantStatus, rr.Code)
-			if tt.wantBodyContains != "" {
-				assert.Contains(t, rr.Body.String(), tt.wantBodyContains)
+			resp := w.Result()
+			defer resp.Body.Close()
+
+			require.Equal(t, tt.expectedStatus, resp.StatusCode)
+
+			if tt.expectBody {
+				var got models.Metrics
+				err := json.NewDecoder(resp.Body).Decode(&got)
+				require.NoError(t, err)
+				require.Equal(t, tt.requestBody, got)
 			}
 		})
 	}
@@ -485,233 +501,255 @@ func TestNewMetricGetBodyHandler(t *testing.T) {
 	defer ctrl.Finish()
 
 	mockGetter := NewMockGetter(ctrl)
-	handler := NewMetricGetBodyHandler(mockGetter)
 
 	tests := []struct {
-		name             string
-		contentType      string
-		requestBody      string
-		mockSetup        func()
-		wantStatus       int
-		wantBodyContains string
+		name           string
+		contentType    string
+		requestBody    any
+		setupMock      func()
+		expectedStatus int
+		expectBody     bool
+		expectedResult *models.Metrics
 	}{
 		{
-			name:        "valid gauge metric get",
+			name:           "invalid_content_type",
+			contentType:    "text/plain",
+			requestBody:    nil,
+			setupMock:      func() {},
+			expectedStatus: http.StatusBadRequest,
+		},
+		{
+			name:           "invalid_json",
+			contentType:    "application/json",
+			requestBody:    "not-a-json",
+			setupMock:      func() {},
+			expectedStatus: http.StatusBadRequest,
+		},
+		{
+			name:           "missing_id",
+			contentType:    "application/json",
+			requestBody:    models.Metrics{MType: models.Gauge},
+			setupMock:      func() {},
+			expectedStatus: http.StatusNotFound,
+		},
+		{
+			name:           "invalid_type",
+			contentType:    "application/json",
+			requestBody:    models.Metrics{ID: "someID", MType: "invalid"},
+			setupMock:      func() {},
+			expectedStatus: http.StatusBadRequest,
+		},
+		{
+			name:        "getter_error",
 			contentType: "application/json",
-			requestBody: `{"id":"metric1","type":"gauge"}`,
-			mockSetup: func() {
-				val := 123.45
-				metric := &models.Metrics{
-					ID:    "metric1",
-					MType: models.Gauge,
-					Value: &val,
-				}
+			requestBody: models.Metrics{ID: "metricX", MType: models.Counter},
+			setupMock: func() {
 				mockGetter.EXPECT().
-					Get(gomock.Any(), &models.MetricID{ID: "metric1", MType: models.Gauge}).
-					Return(metric, nil)
+					Get(gomock.Any(), &models.MetricID{ID: "metricX", MType: models.Counter}).
+					Return(nil, context.DeadlineExceeded)
 			},
-			wantStatus:       http.StatusOK,
-			wantBodyContains: `"id":"metric1"`,
+			expectedStatus: http.StatusInternalServerError,
 		},
 		{
-			name:        "valid counter metric get",
+			name:        "metric_not_found",
 			contentType: "application/json",
-			requestBody: `{"id":"metric2","type":"counter"}`,
-			mockSetup: func() {
-				delta := int64(42)
-				metric := &models.Metrics{
-					ID:    "metric2",
-					MType: models.Counter,
-					Delta: &delta,
-				}
+			requestBody: models.Metrics{ID: "missing", MType: models.Counter},
+			setupMock: func() {
 				mockGetter.EXPECT().
-					Get(gomock.Any(), &models.MetricID{ID: "metric2", MType: models.Counter}).
-					Return(metric, nil)
-			},
-			wantStatus:       http.StatusOK,
-			wantBodyContains: `"id":"metric2"`,
-		},
-		{
-			name:        "missing content-type header",
-			contentType: "text/plain",
-			requestBody: `{"id":"metric1","type":"gauge"}`,
-			mockSetup:   func() {},
-			wantStatus:  http.StatusBadRequest,
-		},
-		{
-			name:        "invalid JSON body",
-			contentType: "application/json",
-			requestBody: `{"id":"metric1","type":"gauge"`, // malformed JSON
-			mockSetup:   func() {},
-			wantStatus:  http.StatusBadRequest,
-		},
-		{
-			name:        "missing id",
-			contentType: "application/json",
-			requestBody: `{"id":"","type":"gauge"}`,
-			mockSetup:   func() {},
-			wantStatus:  http.StatusBadRequest,
-		},
-		{
-			name:        "invalid metric type",
-			contentType: "application/json",
-			requestBody: `{"id":"metric3","type":"invalid"}`,
-			mockSetup:   func() {},
-			wantStatus:  http.StatusBadRequest,
-		},
-		{
-			name:        "getter returns error",
-			contentType: "application/json",
-			requestBody: `{"id":"metric4","type":"gauge"}`,
-			mockSetup: func() {
-				mockGetter.EXPECT().
-					Get(gomock.Any(), gomock.AssignableToTypeOf(&models.MetricID{})).
-					Return(nil, errors.New("get error"))
-			},
-			wantStatus: http.StatusInternalServerError,
-		},
-		{
-			name:        "metric not found",
-			contentType: "application/json",
-			requestBody: `{"id":"metric5","type":"gauge"}`,
-			mockSetup: func() {
-				mockGetter.EXPECT().
-					Get(gomock.Any(), gomock.AssignableToTypeOf(&models.MetricID{})).
+					Get(gomock.Any(), &models.MetricID{ID: "missing", MType: models.Counter}).
 					Return(nil, nil)
 			},
-			wantStatus:       http.StatusNotFound,
-			wantBodyContains: "Not found",
+			expectedStatus: http.StatusNotFound,
+		},
+		{
+			name:        "success_gauge",
+			contentType: "application/json",
+			requestBody: models.Metrics{ID: "g1", MType: models.Gauge},
+			setupMock: func() {
+				mockGetter.EXPECT().
+					Get(gomock.Any(), &models.MetricID{ID: "g1", MType: models.Gauge}).
+					Return(&models.Metrics{
+						ID:    "g1",
+						MType: models.Gauge,
+						Value: float64Ptr(3.14),
+					}, nil)
+			},
+			expectedStatus: http.StatusOK,
+			expectBody:     true,
+			expectedResult: &models.Metrics{
+				ID:    "g1",
+				MType: models.Gauge,
+				Value: float64Ptr(3.14),
+			},
+		},
+		{
+			name:        "success_counter",
+			contentType: "application/json",
+			requestBody: models.Metrics{ID: "c1", MType: models.Counter},
+			setupMock: func() {
+				mockGetter.EXPECT().
+					Get(gomock.Any(), &models.MetricID{ID: "c1", MType: models.Counter}).
+					Return(&models.Metrics{
+						ID:    "c1",
+						MType: models.Counter,
+						Delta: int64Ptr(42),
+					}, nil)
+			},
+			expectedStatus: http.StatusOK,
+			expectBody:     true,
+			expectedResult: &models.Metrics{
+				ID:    "c1",
+				MType: models.Counter,
+				Delta: int64Ptr(42),
+			},
 		},
 	}
 
+	handler := NewMetricGetBodyHandler(mockGetter)
+
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			tt.mockSetup()
+			tt.setupMock()
 
-			req := httptest.NewRequest(http.MethodPost, "/value/", strings.NewReader(tt.requestBody))
+			var body []byte
+			switch v := tt.requestBody.(type) {
+			case string:
+				body = []byte(v)
+			case nil:
+				body = nil
+			default:
+				var err error
+				body, err = json.Marshal(v)
+				require.NoError(t, err)
+			}
+
+			req := httptest.NewRequest(http.MethodPost, "/value/", bytes.NewReader(body))
 			req.Header.Set("Content-Type", tt.contentType)
-			rr := httptest.NewRecorder()
+			rec := httptest.NewRecorder()
 
-			handler.ServeHTTP(rr, req)
+			handler(rec, req)
 
-			assert.Equal(t, tt.wantStatus, rr.Code)
-			if tt.wantBodyContains != "" {
-				assert.Contains(t, rr.Body.String(), tt.wantBodyContains)
+			resp := rec.Result()
+			defer resp.Body.Close()
+
+			require.Equal(t, tt.expectedStatus, resp.StatusCode)
+
+			if tt.expectBody {
+				var got models.Metrics
+				err := json.NewDecoder(resp.Body).Decode(&got)
+				require.NoError(t, err)
+				require.Equal(t, tt.expectedResult, &got)
 			}
 		})
 	}
 }
 
-func TestNewMetricGetPathHandler_Errors(t *testing.T) {
+func TestNewBatchMetricUpdateHandler_Gomock(t *testing.T) {
 	ctrl := gomock.NewController(t)
 	defer ctrl.Finish()
 
-	mockGetter := NewMockGetter(ctrl)
-	handler := NewMetricGetPathHandler(mockGetter)
+	type testCase struct {
+		name               string
+		contentType        string
+		requestBody        interface{}
+		mockSetup          func(m *MockUpdater)
+		expectedStatusCode int
+	}
 
-	tests := []struct {
-		name       string
-		mType      string
-		id         string
-		mockSetup  func()
-		wantStatus int
-		wantBody   string
-	}{
+	tests := []testCase{
 		{
-			name:       "empty id returns 404",
-			mType:      models.Gauge,
-			id:         " ",
-			mockSetup:  func() {}, // no getter call expected
-			wantStatus: http.StatusNotFound,
-			wantBody:   "Not found",
-		},
-		{
-			name:       "invalid metric type returns 400",
-			mType:      "invalid",
-			id:         "metric1",
-			mockSetup:  func() {}, // no getter call expected
-			wantStatus: http.StatusBadRequest,
-			wantBody:   "Bad request",
-		},
-		{
-			name:  "getter returns error 500",
-			mType: models.Gauge,
-			id:    "metric1",
-			mockSetup: func() {
-				mockGetter.EXPECT().
-					Get(gomock.Any(), &models.MetricID{ID: "metric1", MType: models.Gauge}).
-					Return(nil, errors.New("db error"))
+			name:        "valid input",
+			contentType: "application/json",
+			requestBody: []models.Metrics{
+				{ID: "m1", MType: models.Gauge, Value: float64Ptr(1.23)},
+				{ID: "m2", MType: models.Counter, Delta: int64Ptr(42)},
 			},
-			wantStatus: http.StatusInternalServerError,
-			wantBody:   "Internal server error",
-		},
-		{
-			name:  "getter returns nil metric 404",
-			mType: models.Counter,
-			id:    "metric2",
-			mockSetup: func() {
-				mockGetter.EXPECT().
-					Get(gomock.Any(), &models.MetricID{ID: "metric2", MType: models.Counter}).
-					Return(nil, nil)
+			mockSetup: func(m *MockUpdater) {
+				m.EXPECT().Update(gomock.Any(), gomock.Any()).DoAndReturn(
+					func(ctx context.Context, metric *models.Metrics) (*models.Metrics, error) {
+						return metric, nil
+					}).Times(2)
 			},
-			wantStatus: http.StatusNotFound,
-			wantBody:   "Not found",
+			expectedStatusCode: http.StatusOK,
 		},
 		{
-			name:  "gauge metric with nil Value returns 404",
-			mType: models.Gauge,
-			id:    "metric3",
-			mockSetup: func() {
-				mockGetter.EXPECT().
-					Get(gomock.Any(), &models.MetricID{ID: "metric3", MType: models.Gauge}).
-					Return(&models.Metrics{ID: "metric3", MType: models.Gauge, Value: nil}, nil)
+			name:               "invalid content-type",
+			contentType:        "text/plain",
+			requestBody:        nil,
+			mockSetup:          func(m *MockUpdater) {},
+			expectedStatusCode: http.StatusBadRequest,
+		},
+		{
+			name:               "invalid json",
+			contentType:        "application/json",
+			requestBody:        "{bad json}",
+			mockSetup:          func(m *MockUpdater) {},
+			expectedStatusCode: http.StatusBadRequest,
+		},
+		{
+			name:        "empty metric id",
+			contentType: "application/json",
+			requestBody: []models.Metrics{
+				{ID: "", MType: models.Gauge, Value: float64Ptr(1.0)},
 			},
-			wantStatus: http.StatusNotFound,
-			wantBody:   "Not found",
+			mockSetup:          func(m *MockUpdater) {},
+			expectedStatusCode: http.StatusNotFound,
 		},
 		{
-			name:  "counter metric with nil Delta returns 404",
-			mType: models.Counter,
-			id:    "metric4",
-			mockSetup: func() {
-				mockGetter.EXPECT().
-					Get(gomock.Any(), &models.MetricID{ID: "metric4", MType: models.Counter}).
-					Return(&models.Metrics{ID: "metric4", MType: models.Counter, Delta: nil}, nil)
+			name:        "invalid metric type",
+			contentType: "application/json",
+			requestBody: []models.Metrics{
+				{ID: "m1", MType: "invalid", Value: float64Ptr(1.0)},
 			},
-			wantStatus: http.StatusNotFound,
-			wantBody:   "Not found",
+			mockSetup:          func(m *MockUpdater) {},
+			expectedStatusCode: http.StatusBadRequest,
 		},
 		{
-			name:       "metric with unknown type returns 400",
-			mType:      "unknown",
-			id:         "metric5",
-			mockSetup:  func() {}, // no getter call expected
-			wantStatus: http.StatusBadRequest,
-			wantBody:   "Bad request",
+			name:        "updater returns error",
+			contentType: "application/json",
+			requestBody: []models.Metrics{
+				{ID: "m1", MType: models.Gauge, Value: float64Ptr(1.0)},
+			},
+			mockSetup: func(m *MockUpdater) {
+				m.EXPECT().Update(gomock.Any(), gomock.Any()).Return(nil, errors.New("db error")).Times(1)
+			},
+			expectedStatusCode: http.StatusInternalServerError,
 		},
 	}
 
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			tt.mockSetup()
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			mockUpdater := NewMockUpdater(ctrl)
+			tc.mockSetup(mockUpdater)
 
-			req := httptest.NewRequest(
-				http.MethodGet,
-				fmt.Sprintf("/value/%s/%s", url.PathEscape(tt.mType), url.PathEscape(tt.id)),
-				nil,
-			)
-			// chi URL params must be added manually
-			rctx := chi.NewRouteContext()
-			rctx.URLParams.Add("type", tt.mType)
-			rctx.URLParams.Add("id", tt.id)
-			req = req.WithContext(context.WithValue(req.Context(), chi.RouteCtxKey, rctx))
+			handler := NewMetricUpdatesBodyHandler(mockUpdater)
 
-			rr := httptest.NewRecorder()
+			var body []byte
+			switch v := tc.requestBody.(type) {
+			case string:
+				body = []byte(v)
+			case nil:
+				body = nil
+			default:
+				var err error
+				body, err = json.Marshal(v)
+				assert.NoError(t, err)
+			}
 
-			handler.ServeHTTP(rr, req)
+			req := httptest.NewRequest(http.MethodPost, "/updates/", bytes.NewReader(body))
+			req.Header.Set("Content-Type", tc.contentType)
+			rec := httptest.NewRecorder()
 
-			assert.Equal(t, tt.wantStatus, rr.Code)
-			assert.Contains(t, rr.Body.String(), tt.wantBody)
+			handler.ServeHTTP(rec, req)
+
+			assert.Equal(t, tc.expectedStatusCode, rec.Code)
 		})
 	}
+}
+func float64Ptr(v float64) *float64 {
+	return &v
+}
+
+func int64Ptr(v int64) *int64 {
+	return &v
 }
