@@ -2,7 +2,7 @@ package main
 
 import (
 	"context"
-	"os"
+	"log"
 
 	"github.com/sbilibin2017/gophmetrics/internal/apps/server"
 	"github.com/sbilibin2017/gophmetrics/internal/configs/address"
@@ -11,10 +11,10 @@ import (
 func main() {
 	config, err := server.NewConfig()
 	if err != nil {
-		os.Exit(1)
+		log.Fatal(err)
 	}
 	if err := run(context.Background(), config); err != nil {
-		os.Exit(1)
+		log.Fatal(err)
 	}
 }
 
