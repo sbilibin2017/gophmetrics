@@ -26,7 +26,7 @@ func RunHTTP(ctx context.Context, config *Config) error {
 		),
 	)
 
-	updater := httpFacades.NewMetricHTTPFacade(client)
+	updater := httpFacades.NewMetricHTTPFacade(client, config.Key)
 
 	pollTicker := time.NewTicker(time.Duration(config.PollInterval) * time.Second)
 	defer pollTicker.Stop()

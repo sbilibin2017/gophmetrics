@@ -44,7 +44,7 @@ func setupPostgres(t *testing.T) (context.Context, func()) {
 
 	port, err := postgresC.MappedPort(ctx, "5433")
 	require.NoError(t, err)
-
+	time.Sleep(3 * time.Second)
 	dsn := fmt.Sprintf("host=%s port=%s user=testuser password=testpass dbname=testdb sslmode=disable", host, port.Port())
 	db, err = sqlx.ConnectContext(ctx, "pgx", dsn)
 	require.NoError(t, err)

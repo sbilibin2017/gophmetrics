@@ -24,7 +24,7 @@ import (
 func RunMemoryHTTP(ctx context.Context, config *Config) error {
 	writer, reader := newMemoryRepositories()
 	service := services.NewMetricService(writer, reader)
-	r := setupHTTPRouter(service, nil)
+	r := setupHTTPRouter(service, nil, config.Key)
 
 	server := &http.Server{Addr: config.Addr, Handler: r}
 
@@ -52,7 +52,7 @@ func RunFileHTTP(ctx context.Context, config *Config) error {
 	writer, reader := newFileRepositories(config.FileStoragePath)
 	service := services.NewMetricService(writer, reader)
 
-	r := setupHTTPRouter(service, nil)
+	r := setupHTTPRouter(service, nil, config.Key)
 
 	server := &http.Server{Addr: config.Addr, Handler: r}
 
@@ -105,7 +105,7 @@ func RunDBHTTP(ctx context.Context, config *Config) error {
 	writer, reader := newDBRepositories(db)
 	service := services.NewMetricService(writer, reader)
 
-	r := setupHTTPRouter(service, db)
+	r := setupHTTPRouter(service, db, config.Key)
 
 	server := &http.Server{Addr: config.Addr, Handler: r}
 
@@ -145,7 +145,7 @@ func RunDBWithWorkerHTTP(ctx context.Context, config *Config) error {
 
 	writerFile, readerFile := newFileRepositories(config.FileStoragePath)
 
-	r := setupHTTPRouter(service, db)
+	r := setupHTTPRouter(service, db, config.Key)
 
 	server := &http.Server{Addr: config.Addr, Handler: r}
 
@@ -187,11 +187,13 @@ func RunDBWithWorkerHTTP(ctx context.Context, config *Config) error {
 func setupHTTPRouter(
 	svc *services.MetricService,
 	db *sqlx.DB,
+	key string,
 ) *chi.Mux {
 	r := chi.NewRouter()
 
 	r.Use(httpMiddlewares.LoggingMiddleware)
 	r.Use(httpMiddlewares.GzipMiddleware)
+	r.Use(httpMiddlewares.HashMiddleware(key))
 
 	r.Post("/update/{type}/{name}/{value}", httpHandlers.NewMetricUpdatePathHandler(svc))
 	r.Post("/update/", httpHandlers.NewMetricUpdateBodyHandler(svc))

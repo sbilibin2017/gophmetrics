@@ -4,6 +4,8 @@ import (
 	"bytes"
 	"compress/gzip"
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -25,6 +27,14 @@ func decompressGzip(data []byte) ([]byte, error) {
 	return io.ReadAll(gr)
 }
 
+// helper to compute expected hash for test verification
+func computeTestHash(data []byte, key string) string {
+	h := sha256.New()
+	h.Write(data)
+	h.Write([]byte(key))
+	return hex.EncodeToString(h.Sum(nil))
+}
+
 func TestMetricHTTPFacade_Update_Success(t *testing.T) {
 	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		assert.Equal(t, "application/json", r.Header.Get("Content-Type"))
@@ -38,6 +48,9 @@ func TestMetricHTTPFacade_Update_Success(t *testing.T) {
 
 		assert.Contains(t, string(bodyDecompressed), "test_metric")
 
+		// HashSHA256 header should NOT be present when hashKey is empty
+		assert.Empty(t, r.Header.Get("HashSHA256"))
+
 		w.WriteHeader(http.StatusOK)
 	}))
 	defer ts.Close()
@@ -45,7 +58,43 @@ func TestMetricHTTPFacade_Update_Success(t *testing.T) {
 	client := resty.New()
 	client.SetBaseURL(ts.URL)
 
-	facade := NewMetricHTTPFacade(client)
+	facade := NewMetricHTTPFacade(client, "")
+
+	metrics := []*models.Metrics{
+		{ID: "test_metric"},
+	}
+
+	err := facade.Update(context.Background(), metrics)
+	assert.NoError(t, err)
+}
+
+func TestMetricHTTPFacade_Update_WithHashKey(t *testing.T) {
+	const key = "secretkey"
+
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		assert.Equal(t, "application/json", r.Header.Get("Content-Type"))
+		assert.Equal(t, "gzip", r.Header.Get("Content-Encoding"))
+
+		bodyCompressed, err := io.ReadAll(r.Body)
+		assert.NoError(t, err)
+
+		bodyDecompressed, err := decompressGzip(bodyCompressed)
+		assert.NoError(t, err)
+
+		assert.Contains(t, string(bodyDecompressed), "test_metric")
+
+		// Compute expected hash to compare with header
+		expectedHash := computeTestHash(bodyDecompressed, key)
+		assert.Equal(t, expectedHash, r.Header.Get("HashSHA256"))
+
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer ts.Close()
+
+	client := resty.New()
+	client.SetBaseURL(ts.URL)
+
+	facade := NewMetricHTTPFacade(client, key)
 
 	metrics := []*models.Metrics{
 		{ID: "test_metric"},
@@ -57,7 +106,7 @@ func TestMetricHTTPFacade_Update_Success(t *testing.T) {
 
 func TestMetricHTTPFacade_Update_SkipNilMetric(t *testing.T) {
 	client := resty.New()
-	facade := NewMetricHTTPFacade(client)
+	facade := NewMetricHTTPFacade(client, "")
 
 	err := facade.Update(context.Background(), []*models.Metrics{nil})
 	assert.NoError(t, err)

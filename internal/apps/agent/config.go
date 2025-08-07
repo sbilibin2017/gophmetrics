@@ -12,12 +12,14 @@ var (
 	addr           string
 	pollInterval   int
 	reportInterval int
+	key            string // добавляем переменную
 )
 
 func init() {
 	pflag.StringVarP(&addr, "address", "a", "http://localhost:8080", "server URL")
 	pflag.IntVarP(&pollInterval, "poll-interval", "p", 2, "poll interval in seconds")
 	pflag.IntVarP(&reportInterval, "report-interval", "r", 10, "report interval in seconds")
+	pflag.StringVarP(&key, "key", "k", "", "secret key for SHA256 hash") // добавляем флаг
 }
 
 // Config holds all agent configuration values
@@ -25,6 +27,7 @@ type Config struct {
 	Addr           string `json:"address"`
 	PollInterval   int    `json:"poll_interval"`
 	ReportInterval int    `json:"report_interval"`
+	Key            string `json:"key"`
 }
 
 // NewConfig parses flags and environment variables and returns a Config struct or error
@@ -55,10 +58,15 @@ func NewConfig() (*Config, error) {
 		reportInterval = i
 	}
 
+	if key == "" {
+		key = os.Getenv("KEY")
+	}
+
 	cfg := &Config{
 		Addr:           addr,
 		PollInterval:   pollInterval,
 		ReportInterval: reportInterval,
+		Key:            key,
 	}
 
 	return cfg, nil

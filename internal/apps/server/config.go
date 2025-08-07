@@ -16,6 +16,7 @@ var (
 	restore         bool
 	databaseDSN     string
 	migrationsDir   string = "migrations"
+	key             string // <--- добавляем переменную для ключа
 )
 
 func init() {
@@ -24,6 +25,8 @@ func init() {
 	pflag.StringVarP(&fileStoragePath, "file", "f", "metrics.json", "file path to store metrics")
 	pflag.BoolVarP(&restore, "restore", "r", true, "restore metrics from file on startup")
 	pflag.StringVarP(&databaseDSN, "database-dsn", "d", "", "PostgreSQL DSN connection string")
+
+	pflag.StringVarP(&key, "key", "k", "", "secret key for SHA256 hash")
 }
 
 // Config holds all server configuration values
@@ -34,6 +37,7 @@ type Config struct {
 	Restore         bool   `json:"restore"`
 	DatabaseDSN     string `json:"database_dsn"`
 	MigrationsDir   string `json:"migrations_dir"`
+	Key             string `json:"key"`
 }
 
 // NewConfig parses flags, environment variables, and returns a Config struct or an error
@@ -75,6 +79,10 @@ func NewConfig() (*Config, error) {
 		databaseDSN = env
 	}
 
+	if key == "" {
+		key = os.Getenv("KEY")
+	}
+
 	cfg := &Config{
 		Addr:            addr,
 		StoreInterval:   storeInterval,
@@ -82,6 +90,7 @@ func NewConfig() (*Config, error) {
 		Restore:         restore,
 		DatabaseDSN:     databaseDSN,
 		MigrationsDir:   migrationsDir,
+		Key:             key,
 	}
 
 	return cfg, nil

@@ -9,13 +9,22 @@ import (
 	"strings"
 )
 
-// GzipMiddleware is an HTTP middleware that handles gzip compression and decompression
-// for incoming requests and outgoing responses.
-// It decompresses the request body if the Content-Encoding header is "gzip".
-// It compresses the response body with gzip if the client supports it via Accept-Encoding.
+// GzipMiddleware is an HTTP middleware that handles gzip compression and decompression.
+//
+// For incoming requests:
+//   - If the "Content-Encoding" header is set to "gzip", it decompresses the request body
+//     and replaces the original body with the decompressed content.
+//   - It removes the "Content-Encoding" header after decompression.
+//
+// For outgoing responses:
+//   - If the "Accept-Encoding" header from the client contains "gzip", the middleware buffers
+//     the response body, and if the response Content-Type is "application/json" or "text/html",
+//     it compresses the response body using gzip and sets the "Content-Encoding: gzip" header.
+//   - Otherwise, the response is sent uncompressed.
+//
+// This middleware transparently handles gzip for compatible clients and servers.
 func GzipMiddleware(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		// Decompress request body if Content-Encoding is gzip
 		if strings.EqualFold(r.Header.Get("Content-Encoding"), "gzip") {
 			compressedBody, err := io.ReadAll(r.Body)
 			if err != nil {
@@ -28,13 +37,13 @@ func GzipMiddleware(next http.Handler) http.Handler {
 				return
 			}
 			r.Body = io.NopCloser(bytes.NewReader(decompressedBody))
+			r.Header.Del("Content-Encoding")
 		}
 
-		// Compress response body if client supports gzip
 		if strings.Contains(r.Header.Get("Accept-Encoding"), "gzip") {
 			gzw := newGzipBufferResponseWriter(w)
 			next.ServeHTTP(gzw, r)
-			_ = gzw.Flush() // optionally handle error
+			_ = gzw.Flush()
 			return
 		}
 
@@ -42,7 +51,7 @@ func GzipMiddleware(next http.Handler) http.Handler {
 	})
 }
 
-// compress compresses the input data using gzip format.
+// compress compresses the input data using gzip and returns the compressed bytes.
 func compress(data []byte) ([]byte, error) {
 	var buf bytes.Buffer
 	gzw := gzip.NewWriter(&buf)
@@ -56,7 +65,7 @@ func compress(data []byte) ([]byte, error) {
 	return buf.Bytes(), nil
 }
 
-// decompress decompresses gzip-compressed data and returns the original data.
+// decompress decompresses gzip-compressed data and returns the original uncompressed bytes.
 func decompress(data []byte) ([]byte, error) {
 	buf := bytes.NewBuffer(data)
 	gr, err := gzip.NewReader(buf)
@@ -72,8 +81,8 @@ func decompress(data []byte) ([]byte, error) {
 	return out.Bytes(), nil
 }
 
-// gzipBufferResponseWriter is a custom http.ResponseWriter that buffers response data
-// and compresses it before sending if appropriate.
+// gzipBufferResponseWriter is an http.ResponseWriter that buffers the response body
+// for optional gzip compression before sending it to the client.
 type gzipBufferResponseWriter struct {
 	http.ResponseWriter
 	buf         *bytes.Buffer
@@ -81,8 +90,8 @@ type gzipBufferResponseWriter struct {
 	wroteHeader bool
 }
 
-// newGzipBufferResponseWriter creates a new gzipBufferResponseWriter wrapping
-// the provided ResponseWriter.
+// newGzipBufferResponseWriter creates a new gzipBufferResponseWriter that wraps the
+// given http.ResponseWriter and buffers the response body.
 func newGzipBufferResponseWriter(w http.ResponseWriter) *gzipBufferResponseWriter {
 	return &gzipBufferResponseWriter{
 		ResponseWriter: w,
@@ -96,7 +105,7 @@ func (w *gzipBufferResponseWriter) Header() http.Header {
 	return w.ResponseWriter.Header()
 }
 
-// WriteHeader records the status code to send with the response.
+// WriteHeader buffers the HTTP status code to send later.
 func (w *gzipBufferResponseWriter) WriteHeader(statusCode int) {
 	if !w.wroteHeader {
 		w.statusCode = statusCode
@@ -104,14 +113,12 @@ func (w *gzipBufferResponseWriter) WriteHeader(statusCode int) {
 	}
 }
 
-// Write buffers the response body data.
+// Write buffers the response body bytes.
 func (w *gzipBufferResponseWriter) Write(b []byte) (int, error) {
 	return w.buf.Write(b)
 }
 
-// Flush compresses the buffered response body if the content type
-// indicates it should be compressed, sets the appropriate headers,
-// and writes the response to the client.
+// Flush compresses the buffered body if needed and writes headers and body to the underlying ResponseWriter.
 func (w *gzipBufferResponseWriter) Flush() error {
 	if !w.wroteHeader {
 		w.WriteHeader(http.StatusOK)
@@ -130,14 +137,21 @@ func (w *gzipBufferResponseWriter) Flush() error {
 
 		w.Header().Set("Content-Encoding", "gzip")
 		w.Header().Set("Content-Length", strconv.Itoa(len(compressedBody)))
-		w.ResponseWriter.WriteHeader(w.statusCode)
+
+		if !w.wroteHeader {
+			w.ResponseWriter.WriteHeader(w.statusCode)
+			w.wroteHeader = true
+		}
 		_, err = w.ResponseWriter.Write(compressedBody)
 		return err
 	}
 
-	// Write uncompressed response body
 	w.Header().Set("Content-Length", strconv.Itoa(len(body)))
-	w.ResponseWriter.WriteHeader(w.statusCode)
+
+	if !w.wroteHeader {
+		w.ResponseWriter.WriteHeader(w.statusCode)
+		w.wroteHeader = true
+	}
 	_, err := w.ResponseWriter.Write(body)
 	return err
 }

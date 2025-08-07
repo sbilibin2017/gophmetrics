@@ -208,11 +208,6 @@ func NewMetricListHTMLHandler(lister Lister) http.HandlerFunc {
 // @Router /update/ [post]
 func NewMetricUpdateBodyHandler(updater Updater) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		if r.Header.Get("Content-Type") != "application/json" {
-			w.WriteHeader(http.StatusBadRequest)
-			return
-		}
-
 		var metric models.Metrics
 		dec := json.NewDecoder(r.Body)
 		defer r.Body.Close()
