@@ -4,6 +4,9 @@ import (
 	"bytes"
 	"compress/gzip"
 	"context"
+	"crypto/hmac"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 
 	"github.com/go-resty/resty/v2"
@@ -13,12 +16,17 @@ import (
 // MetricHTTPFacade provides HTTP-based metric updates.
 type MetricHTTPFacade struct {
 	client *resty.Client
+	key    string
 }
 
 // NewMetricHTTPFacade creates a new MetricHTTPFacade with the given REST client.
-func NewMetricHTTPFacade(client *resty.Client) *MetricHTTPFacade {
+func NewMetricHTTPFacade(
+	client *resty.Client,
+	key string,
+) *MetricHTTPFacade {
 	return &MetricHTTPFacade{
 		client: client,
+		key:    key,
 	}
 }
 
@@ -40,14 +48,23 @@ func (f *MetricHTTPFacade) Update(ctx context.Context, metrics []*models.Metrics
 			return err
 		}
 
-		_, err = f.client.R().
+		req := f.client.R().
 			SetContext(ctx).
 			SetHeader("Content-Type", "application/json").
 			SetHeader("Content-Encoding", "gzip").
-			SetBody(compressedData).
-			Post("/update/")
+			SetBody(compressedData)
 
+		if f.key != "" {
+			hash := computeHash(f.key, jsonData)
+			req.SetHeader("HashSHA256", hash)
+		}
+
+		resp, err := req.Post("/update/")
 		if err != nil {
+			return err
+		}
+
+		if resp.IsError() {
 			return err
 		}
 	}
@@ -68,4 +85,15 @@ func compressGzip(data []byte) ([]byte, error) {
 		return nil, err
 	}
 	return buf.Bytes(), nil
+}
+
+// computeHash computes the HMAC SHA256 hash of data using the provided key,
+// returning the hex-encoded string. If key is empty, returns an empty string.
+func computeHash(key string, data []byte) string {
+	if key == "" {
+		return ""
+	}
+	mac := hmac.New(sha256.New, []byte(key))
+	mac.Write(data)
+	return hex.EncodeToString(mac.Sum(nil))
 }
