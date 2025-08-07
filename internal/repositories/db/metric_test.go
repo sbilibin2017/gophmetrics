@@ -23,13 +23,14 @@ func setupPostgres(t *testing.T) (context.Context, func()) {
 
 	req := testcontainers.ContainerRequest{
 		Image:        "postgres:15-alpine",
-		ExposedPorts: []string{"5432/tcp"},
+		ExposedPorts: []string{"5433/tcp"},
 		Env: map[string]string{
 			"POSTGRES_USER":     "testuser",
 			"POSTGRES_PASSWORD": "testpass",
 			"POSTGRES_DB":       "testdb",
 		},
-		WaitingFor: wait.ForListeningPort("5432/tcp").WithStartupTimeout(60 * time.Second),
+		Cmd:        []string{"postgres", "-p", "5433"}, // <-- run postgres on port 5433
+		WaitingFor: wait.ForListeningPort("5433/tcp").WithStartupTimeout(60 * time.Second),
 	}
 
 	postgresC, err := testcontainers.GenericContainer(ctx, testcontainers.GenericContainerRequest{
@@ -40,14 +41,14 @@ func setupPostgres(t *testing.T) (context.Context, func()) {
 
 	host, err := postgresC.Host(ctx)
 	require.NoError(t, err)
-	port, err := postgresC.MappedPort(ctx, "5432")
+
+	port, err := postgresC.MappedPort(ctx, "5433")
 	require.NoError(t, err)
 
 	dsn := fmt.Sprintf("host=%s port=%s user=testuser password=testpass dbname=testdb sslmode=disable", host, port.Port())
 	db, err = sqlx.ConnectContext(ctx, "pgx", dsn)
 	require.NoError(t, err)
 
-	// Updated schema with created_at and updated_at
 	schema := `
 CREATE TABLE IF NOT EXISTS metrics (
 	id         VARCHAR(255)      NOT NULL,

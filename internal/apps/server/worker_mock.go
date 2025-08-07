@@ -2,7 +2,7 @@
 // Source: /home/sergey/Github/gophmetrics/internal/apps/server/worker/worker.go
 
 // Package worker is a generated GoMock package.
-package worker
+package server
 
 import (
 	context "context"
