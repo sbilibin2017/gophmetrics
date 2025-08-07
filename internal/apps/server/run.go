@@ -189,6 +189,7 @@ func setupHTTPRouter(
 	db *sqlx.DB,
 ) *chi.Mux {
 	r := chi.NewRouter()
+
 	r.Use(httpMiddlewares.LoggingMiddleware)
 	r.Use(httpMiddlewares.GzipMiddleware)
 
