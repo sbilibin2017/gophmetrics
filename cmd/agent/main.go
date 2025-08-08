@@ -19,6 +19,17 @@ import (
 	"github.com/spf13/pflag"
 )
 
+// main parses flags and starts the agent.
+func main() {
+	if err := parseFlags(); err != nil {
+		log.Fatal(err)
+	}
+
+	if err := run(context.Background()); err != nil {
+		log.Fatal(err)
+	}
+}
+
 var (
 	addr           string                // Server URL address
 	pollInterval   int                   // Poll interval in seconds
@@ -78,17 +89,6 @@ func parseFlags() error {
 	}
 
 	return nil
-}
-
-// main parses flags and starts the agent.
-func main() {
-	if err := parseFlags(); err != nil {
-		log.Fatal(err)
-	}
-
-	if err := run(context.Background()); err != nil {
-		log.Fatal(err)
-	}
 }
 
 // run starts the agent based on the scheme of the provided address.
