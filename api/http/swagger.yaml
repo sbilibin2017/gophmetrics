@@ -1,0 +1,230 @@
+definitions:
+  models.MetricID:
+    properties:
+      id:
+        description: |-
+          Metric name or identifier.
+
+          required: true
+        example: metric_name
+        type: string
+      type:
+        description: |-
+          Metric type: "counter" or "gauge".
+
+          required: true
+          enum: counter,gauge
+        example: gauge
+        type: string
+    type: object
+  models.Metrics:
+    properties:
+      created_at:
+        description: |-
+          Creation timestamp (read-only).
+
+          read only: true
+        type: string
+      delta:
+        description: |-
+          Value delta for counters.
+
+          required: false
+        type: integer
+      id:
+        description: |-
+          Metric name or identifier.
+
+          required: true
+        type: string
+      type:
+        description: |-
+          Metric type: "counter" or "gauge".
+
+          required: true
+        type: string
+      updated_at:
+        description: |-
+          Last update timestamp (read-only).
+
+          read only: true
+        type: string
+      value:
+        description: |-
+          Current value for gauges.
+
+          required: false
+        type: number
+    type: object
+info:
+  contact: {}
+paths:
+  /:
+    get:
+      consumes:
+      - text/plain
+      description: Returns an HTML page with all metrics in a table
+      produces:
+      - text/html
+      responses:
+        "200":
+          description: HTML table of all metrics
+          schema:
+            type: string
+        "500":
+          description: Internal Server Error
+      summary: List all metrics
+      tags:
+      - metrics
+  /update/:
+    post:
+      consumes:
+      - application/json
+      description: Updates a metric using a JSON body
+      parameters:
+      - description: Metric JSON body
+        in: body
+        name: metric
+        required: true
+        schema:
+          $ref: '#/definitions/models.Metrics'
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: Updated metric returned in response
+          schema:
+            $ref: '#/definitions/models.Metrics'
+        "400":
+          description: Bad Request
+        "404":
+          description: Not Found
+        "500":
+          description: Internal Server Error
+      summary: Save or update a metric (JSON)
+      tags:
+      - metrics
+  /update/{type}/{name}/{value}:
+    post:
+      consumes:
+      - text/plain
+      description: Updates a metric value or delta via POST request with URL parameters
+      parameters:
+      - description: Metric type (gauge or counter)
+        in: path
+        name: type
+        required: true
+        type: string
+      - description: Metric name
+        in: path
+        name: name
+        required: true
+        type: string
+      - description: Metric value (float for gauge, int for counter)
+        in: path
+        name: value
+        required: true
+        type: string
+      produces:
+      - text/plain
+      responses:
+        "200":
+          description: OK
+        "400":
+          description: Bad Request
+        "404":
+          description: Not Found
+        "500":
+          description: Internal Server Error
+      summary: Save or update a metric
+      tags:
+      - metrics
+  /updates/:
+    post:
+      consumes:
+      - application/json
+      description: Updates multiple metrics using a JSON array in request body
+      parameters:
+      - description: List of metric JSON objects
+        in: body
+        name: metrics
+        required: true
+        schema:
+          items:
+            $ref: '#/definitions/models.Metrics'
+          type: array
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: All metrics updated successfully
+        "400":
+          description: Bad Request
+        "404":
+          description: Not Found
+        "500":
+          description: Internal Server Error
+      summary: Save or update multiple metrics (JSON)
+      tags:
+      - metrics
+  /value/:
+    post:
+      consumes:
+      - application/json
+      description: Retrieves a metric by ID and type using JSON body
+      parameters:
+      - description: Metric request body with ID and MType
+        in: body
+        name: metric
+        required: true
+        schema:
+          $ref: '#/definitions/models.MetricID'
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: Metric returned with current value
+          schema:
+            $ref: '#/definitions/models.Metrics'
+        "400":
+          description: Bad Request
+        "404":
+          description: Not Found
+        "500":
+          description: Internal Server Error
+      summary: Get metric value (JSON)
+      tags:
+      - metrics
+  /value/{type}/{id}:
+    get:
+      consumes:
+      - text/plain
+      description: Retrieves a metric value or delta as plain text
+      parameters:
+      - description: Metric type (gauge or counter)
+        in: path
+        name: type
+        required: true
+        type: string
+      - description: Metric ID
+        in: path
+        name: id
+        required: true
+        type: string
+      produces:
+      - text/plain
+      responses:
+        "200":
+          description: Metric value as plain text
+          schema:
+            type: string
+        "400":
+          description: Bad Request
+        "404":
+          description: Not Found
+        "500":
+          description: Internal Server Error
+      summary: Get metric by type and ID
+      tags:
+      - metrics
+swagger: "2.0"
