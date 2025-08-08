@@ -3,7 +3,6 @@ package http
 import (
 	"context"
 	"encoding/json"
-	"errors"
 	"net/http"
 	"strconv"
 	"strings"
@@ -50,11 +49,11 @@ func NewMetricUpdatePathHandler(updater Updater) http.HandlerFunc {
 		id := chi.URLParam(r, "name")
 		valStr := chi.URLParam(r, "value")
 
-		if err := validateIDString(id); err != nil {
+		if strings.TrimSpace(id) == "" {
 			w.WriteHeader(http.StatusNotFound)
 			return
 		}
-		if err := validateMetricType(mType); err != nil {
+		if mType != models.Gauge && mType != models.Counter {
 			w.WriteHeader(http.StatusBadRequest)
 			return
 		}
@@ -65,14 +64,14 @@ func NewMetricUpdatePathHandler(updater Updater) http.HandlerFunc {
 
 		switch mType {
 		case models.Gauge:
-			v, err := parseGaugeValue(valStr)
+			v, err := strconv.ParseFloat(valStr, 64)
 			if err != nil {
 				w.WriteHeader(http.StatusBadRequest)
 				return
 			}
 			metric.Value = &v
 		case models.Counter:
-			d, err := parseCounterValue(valStr)
+			d, err := strconv.ParseInt(valStr, 10, 64)
 			if err != nil {
 				w.WriteHeader(http.StatusBadRequest)
 				return
@@ -110,11 +109,11 @@ func NewMetricGetPathHandler(getter Getter) http.HandlerFunc {
 		mType := chi.URLParam(r, "type")
 		id := chi.URLParam(r, "id")
 
-		if err := validateIDString(id); err != nil {
+		if strings.TrimSpace(id) == "" {
 			w.WriteHeader(http.StatusNotFound)
 			return
 		}
-		if err := validateMetricType(mType); err != nil {
+		if mType != models.Gauge && mType != models.Counter {
 			w.WriteHeader(http.StatusBadRequest)
 			return
 		}
@@ -221,11 +220,12 @@ func NewMetricUpdateBodyHandler(updater Updater) http.HandlerFunc {
 			w.WriteHeader(http.StatusBadRequest)
 			return
 		}
-		if err := validateIDString(metric.ID); err != nil {
+
+		if strings.TrimSpace(metric.ID) == "" {
 			w.WriteHeader(http.StatusNotFound)
 			return
 		}
-		if err := validateMetricType(metric.MType); err != nil {
+		if metric.MType != models.Gauge && metric.MType != models.Counter {
 			w.WriteHeader(http.StatusBadRequest)
 			return
 		}
@@ -270,11 +270,12 @@ func NewMetricGetBodyHandler(getter Getter) http.HandlerFunc {
 			w.WriteHeader(http.StatusBadRequest)
 			return
 		}
-		if err := validateIDString(requestMetric.ID); err != nil {
+
+		if strings.TrimSpace(requestMetric.ID) == "" {
 			w.WriteHeader(http.StatusNotFound)
 			return
 		}
-		if err := validateMetricType(requestMetric.MType); err != nil {
+		if requestMetric.MType != models.Gauge && requestMetric.MType != models.Counter {
 			w.WriteHeader(http.StatusBadRequest)
 			return
 		}
@@ -323,11 +324,12 @@ func NewMetricUpdatesBodyHandler(updater Updater) http.HandlerFunc {
 		}
 
 		for _, metric := range metrics {
-			if err := validateIDString(metric.ID); err != nil {
+			// Inline validation of ID and MType
+			if strings.TrimSpace(metric.ID) == "" {
 				w.WriteHeader(http.StatusNotFound)
 				return
 			}
-			if err := validateMetricType(metric.MType); err != nil {
+			if metric.MType != models.Gauge && metric.MType != models.Counter {
 				w.WriteHeader(http.StatusBadRequest)
 				return
 			}
@@ -340,34 +342,4 @@ func NewMetricUpdatesBodyHandler(updater Updater) http.HandlerFunc {
 
 		w.WriteHeader(http.StatusOK)
 	}
-}
-
-// validateIDString checks if the given ID string is non-empty and not just whitespace.
-// Returns an error if the ID is invalid.
-func validateIDString(id string) error {
-	if strings.TrimSpace(id) == "" {
-		return errors.New("id is empty")
-	}
-	return nil
-}
-
-// validateMetricType checks whether the metric type is either "gauge" or "counter".
-// Returns an error if the type is invalid.
-func validateMetricType(mType string) error {
-	if mType != models.Gauge && mType != models.Counter {
-		return errors.New("invalid metric type")
-	}
-	return nil
-}
-
-// parseGaugeValue converts a string to a float64, used for gauge metrics.
-// Returns a parsing error if conversion fails.
-func parseGaugeValue(valStr string) (float64, error) {
-	return strconv.ParseFloat(valStr, 64)
-}
-
-// parseCounterValue converts a string to an int64, used for counter metrics.
-// Returns a parsing error if conversion fails.
-func parseCounterValue(valStr string) (int64, error) {
-	return strconv.ParseInt(valStr, 10, 64)
 }

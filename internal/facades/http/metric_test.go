@@ -49,7 +49,7 @@ func TestMetricHTTPFacade_Update_Success(t *testing.T) {
 	client := resty.New()
 	client.SetBaseURL(ts.URL)
 
-	facade := NewMetricHTTPFacade(client, "") // no key
+	facade := NewMetricHTTPFacade(client, "", "") // no key
 
 	metrics := []*models.Metrics{
 		{ID: "test_metric"},
@@ -61,7 +61,7 @@ func TestMetricHTTPFacade_Update_Success(t *testing.T) {
 
 func TestMetricHTTPFacade_Update_SkipNilMetric(t *testing.T) {
 	client := resty.New()
-	facade := NewMetricHTTPFacade(client, "")
+	facade := NewMetricHTTPFacade(client, "", "")
 
 	err := facade.Update(context.Background(), []*models.Metrics{nil})
 	assert.NoError(t, err)
@@ -81,6 +81,7 @@ func TestCompressGzip_And_Decompress(t *testing.T) {
 
 func TestMetricHTTPFacade_Update_WithHash(t *testing.T) {
 	const key = "testkey123"
+	const headerName = "HashSHA256"
 
 	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		assert.Equal(t, http.MethodPost, r.Method)
@@ -93,7 +94,7 @@ func TestMetricHTTPFacade_Update_WithHash(t *testing.T) {
 		bodyDecompressed, err := decompressGzip(bodyCompressed)
 		assert.NoError(t, err)
 
-		receivedHash := r.Header.Get("HashSHA256")
+		receivedHash := r.Header.Get(headerName)
 		assert.NotEmpty(t, receivedHash)
 
 		// Correct HMAC-SHA256 with key on the original (decompressed) body
@@ -110,7 +111,8 @@ func TestMetricHTTPFacade_Update_WithHash(t *testing.T) {
 	client := resty.New()
 	client.SetBaseURL(ts.URL)
 
-	facade := NewMetricHTTPFacade(client, key)
+	// Pass the header name here (previously was empty string)
+	facade := NewMetricHTTPFacade(client, key, headerName)
 
 	metrics := []*models.Metrics{
 		{ID: "test_metric"},

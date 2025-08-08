@@ -1,4 +1,4 @@
-package server
+package worker
 
 import (
 	"context"
@@ -35,8 +35,8 @@ type CurrentReader interface {
 	List(ctx context.Context) ([]*models.Metrics, error)
 }
 
-// runMetricWorker runs worker.
-func runMetricWorker(
+// Run runs worker.
+func Run(
 	ctx context.Context,
 	restore bool,
 	storeTicker *time.Ticker,

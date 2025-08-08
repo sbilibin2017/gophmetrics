@@ -8,6 +8,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"fmt"
 
 	"github.com/go-resty/resty/v2"
 	"github.com/sbilibin2017/gophmetrics/internal/models"
@@ -17,16 +18,19 @@ import (
 type MetricHTTPFacade struct {
 	client *resty.Client
 	key    string
+	header string
 }
 
 // NewMetricHTTPFacade creates a new MetricHTTPFacade with the given REST client.
 func NewMetricHTTPFacade(
 	client *resty.Client,
 	key string,
+	header string,
 ) *MetricHTTPFacade {
 	return &MetricHTTPFacade{
 		client: client,
 		key:    key,
+		header: header,
 	}
 }
 
@@ -54,9 +58,9 @@ func (f *MetricHTTPFacade) Update(ctx context.Context, metrics []*models.Metrics
 			SetHeader("Content-Encoding", "gzip").
 			SetBody(compressedData)
 
-		if f.key != "" {
+		if f.key != "" && f.header != "" {
 			hash := computeHash(f.key, jsonData)
-			req.SetHeader("HashSHA256", hash)
+			req.SetHeader(f.header, hash)
 		}
 
 		resp, err := req.Post("/update/")
@@ -65,7 +69,7 @@ func (f *MetricHTTPFacade) Update(ctx context.Context, metrics []*models.Metrics
 		}
 
 		if resp.IsError() {
-			return err
+			return fmt.Errorf("server responded with status %d", resp.StatusCode())
 		}
 	}
 	return nil

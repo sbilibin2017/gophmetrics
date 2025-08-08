@@ -20,7 +20,6 @@ type Metrics struct {
 	MType     string    `json:"type" db:"type"`                       // Metric type: "counter" or "gauge".
 	Delta     *int64    `json:"delta,omitempty" db:"delta"`           // Value delta for counters.
 	Value     *float64  `json:"value,omitempty" db:"value"`           // Current value for gauges.
-	Hash      string    `json:"hash,omitempty" db:"hash"`             // Optional hash for integrity checking.
 	CreatedAt time.Time `json:"created_at,omitempty" db:"created_at"` // Creation timestamp
 	UpdatedAt time.Time `json:"updated_at,omitempty" db:"updated_at"` // Last update timestamp
 }

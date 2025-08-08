@@ -1,4 +1,4 @@
-package server
+package worker
 
 import (
 	"context"
@@ -41,7 +41,7 @@ func Test_runMetricWorker_RestoreAndShutdown(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	doneCh := make(chan error)
 	go func() {
-		doneCh <- runMetricWorker(ctx, true, nil, currentReader, currentWriter, fileReader, fileWriter)
+		doneCh <- Run(ctx, true, nil, currentReader, currentWriter, fileReader, fileWriter)
 	}()
 
 	time.Sleep(50 * time.Millisecond)
@@ -78,7 +78,7 @@ func Test_runMetricWorker_PeriodicSave(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 350*time.Millisecond)
 	defer cancel()
 
-	err := runMetricWorker(ctx, false, ticker, currentReader, currentWriter, fileReader, fileWriter)
+	err := Run(ctx, false, ticker, currentReader, currentWriter, fileReader, fileWriter)
 	assert.NoError(t, err)
 }
 
@@ -97,7 +97,7 @@ func Test_runMetricWorker_RestoreError(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
-	err := runMetricWorker(ctx, true, nil, currentReader, currentWriter, fileReader, fileWriter)
+	err := Run(ctx, true, nil, currentReader, currentWriter, fileReader, fileWriter)
 	assert.EqualError(t, err, "restore error")
 }
 
