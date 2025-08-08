@@ -207,11 +207,6 @@ func NewMetricListHTMLHandler(lister Lister) http.HandlerFunc {
 // @Router /update/ [post]
 func NewMetricUpdateBodyHandler(updater Updater) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		if r.Header.Get("Content-Type") != "application/json" {
-			w.WriteHeader(http.StatusBadRequest)
-			return
-		}
-
 		var metric models.Metrics
 		dec := json.NewDecoder(r.Body)
 		defer r.Body.Close()
@@ -245,11 +240,11 @@ func NewMetricUpdateBodyHandler(updater Updater) http.HandlerFunc {
 // NewMetricGetBodyHandler creates a handler that retrieves a metric by JSON payload.
 //
 // @Summary Get metric value (JSON)
-// @Description Retrieves a metric by ID and type using POST JSON body
+// @Description Retrieves a metric by ID and type using JSON body
 // @Tags metrics
 // @Accept json
 // @Produce json
-// @Param metric body models.Metrics true "Metric request body with ID and MType"
+// @Param metric body models.MetricID true "Metric request body with ID and MType"
 // @Success 200 {object} models.Metrics "Metric returned with current value"
 // @Failure 400 "Bad Request"
 // @Failure 404 "Not Found"
@@ -257,12 +252,7 @@ func NewMetricUpdateBodyHandler(updater Updater) http.HandlerFunc {
 // @Router /value/ [post]
 func NewMetricGetBodyHandler(getter Getter) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		if r.Header.Get("Content-Type") != "application/json" {
-			w.WriteHeader(http.StatusBadRequest)
-			return
-		}
-
-		var requestMetric models.Metrics
+		var requestMetric models.MetricID
 		dec := json.NewDecoder(r.Body)
 		defer r.Body.Close()
 
@@ -280,10 +270,7 @@ func NewMetricGetBodyHandler(getter Getter) http.HandlerFunc {
 			return
 		}
 
-		metric, err := getter.Get(r.Context(), &models.MetricID{
-			ID:    requestMetric.ID,
-			MType: requestMetric.MType,
-		})
+		metric, err := getter.Get(r.Context(), &requestMetric)
 		if err != nil {
 			w.WriteHeader(http.StatusInternalServerError)
 			return

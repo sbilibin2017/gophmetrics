@@ -1,0 +1,309 @@
+{
+    "swagger": "2.0",
+    "info": {
+        "contact": {}
+    },
+    "paths": {
+        "/": {
+            "get": {
+                "description": "Returns an HTML page with all metrics in a table",
+                "consumes": [
+                    "text/plain"
+                ],
+                "produces": [
+                    "text/html"
+                ],
+                "tags": [
+                    "metrics"
+                ],
+                "summary": "List all metrics",
+                "responses": {
+                    "200": {
+                        "description": "HTML table of all metrics",
+                        "schema": {
+                            "type": "string"
+                        }
+                    },
+                    "500": {
+                        "description": "Internal Server Error"
+                    }
+                }
+            }
+        },
+        "/update/": {
+            "post": {
+                "description": "Updates a metric using a JSON body",
+                "consumes": [
+                    "application/json"
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "metrics"
+                ],
+                "summary": "Save or update a metric (JSON)",
+                "parameters": [
+                    {
+                        "description": "Metric JSON body",
+                        "name": "metric",
+                        "in": "body",
+                        "required": true,
+                        "schema": {
+                            "$ref": "#/definitions/models.Metrics"
+                        }
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "Updated metric returned in response",
+                        "schema": {
+                            "$ref": "#/definitions/models.Metrics"
+                        }
+                    },
+                    "400": {
+                        "description": "Bad Request"
+                    },
+                    "404": {
+                        "description": "Not Found"
+                    },
+                    "500": {
+                        "description": "Internal Server Error"
+                    }
+                }
+            }
+        },
+        "/update/{type}/{name}/{value}": {
+            "post": {
+                "description": "Updates a metric value or delta via POST request with URL parameters",
+                "consumes": [
+                    "text/plain"
+                ],
+                "produces": [
+                    "text/plain"
+                ],
+                "tags": [
+                    "metrics"
+                ],
+                "summary": "Save or update a metric",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "Metric type (gauge or counter)",
+                        "name": "type",
+                        "in": "path",
+                        "required": true
+                    },
+                    {
+                        "type": "string",
+                        "description": "Metric name",
+                        "name": "name",
+                        "in": "path",
+                        "required": true
+                    },
+                    {
+                        "type": "string",
+                        "description": "Metric value (float for gauge, int for counter)",
+                        "name": "value",
+                        "in": "path",
+                        "required": true
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK"
+                    },
+                    "400": {
+                        "description": "Bad Request"
+                    },
+                    "404": {
+                        "description": "Not Found"
+                    },
+                    "500": {
+                        "description": "Internal Server Error"
+                    }
+                }
+            }
+        },
+        "/updates/": {
+            "post": {
+                "description": "Updates multiple metrics using a JSON array in request body",
+                "consumes": [
+                    "application/json"
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "metrics"
+                ],
+                "summary": "Save or update multiple metrics (JSON)",
+                "parameters": [
+                    {
+                        "description": "List of metric JSON objects",
+                        "name": "metrics",
+                        "in": "body",
+                        "required": true,
+                        "schema": {
+                            "type": "array",
+                            "items": {
+                                "$ref": "#/definitions/models.Metrics"
+                            }
+                        }
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "All metrics updated successfully"
+                    },
+                    "400": {
+                        "description": "Bad Request"
+                    },
+                    "404": {
+                        "description": "Not Found"
+                    },
+                    "500": {
+                        "description": "Internal Server Error"
+                    }
+                }
+            }
+        },
+        "/value/": {
+            "post": {
+                "description": "Retrieves a metric by ID and type using JSON body",
+                "consumes": [
+                    "application/json"
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "metrics"
+                ],
+                "summary": "Get metric value (JSON)",
+                "parameters": [
+                    {
+                        "description": "Metric request body with ID and MType",
+                        "name": "metric",
+                        "in": "body",
+                        "required": true,
+                        "schema": {
+                            "$ref": "#/definitions/models.MetricID"
+                        }
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "Metric returned with current value",
+                        "schema": {
+                            "$ref": "#/definitions/models.Metrics"
+                        }
+                    },
+                    "400": {
+                        "description": "Bad Request"
+                    },
+                    "404": {
+                        "description": "Not Found"
+                    },
+                    "500": {
+                        "description": "Internal Server Error"
+                    }
+                }
+            }
+        },
+        "/value/{type}/{id}": {
+            "get": {
+                "description": "Retrieves a metric value or delta as plain text",
+                "consumes": [
+                    "text/plain"
+                ],
+                "produces": [
+                    "text/plain"
+                ],
+                "tags": [
+                    "metrics"
+                ],
+                "summary": "Get metric by type and ID",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "Metric type (gauge or counter)",
+                        "name": "type",
+                        "in": "path",
+                        "required": true
+                    },
+                    {
+                        "type": "string",
+                        "description": "Metric ID",
+                        "name": "id",
+                        "in": "path",
+                        "required": true
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "Metric value as plain text",
+                        "schema": {
+                            "type": "string"
+                        }
+                    },
+                    "400": {
+                        "description": "Bad Request"
+                    },
+                    "404": {
+                        "description": "Not Found"
+                    },
+                    "500": {
+                        "description": "Internal Server Error"
+                    }
+                }
+            }
+        }
+    },
+    "definitions": {
+        "models.MetricID": {
+            "type": "object",
+            "properties": {
+                "id": {
+                    "description": "Metric name or identifier.\n\nrequired: true",
+                    "type": "string",
+                    "example": "metric_name"
+                },
+                "type": {
+                    "description": "Metric type: \"counter\" or \"gauge\".\n\nrequired: true\nenum: counter,gauge",
+                    "type": "string",
+                    "example": "gauge"
+                }
+            }
+        },
+        "models.Metrics": {
+            "type": "object",
+            "properties": {
+                "created_at": {
+                    "description": "Creation timestamp (read-only).\n\nread only: true",
+                    "type": "string"
+                },
+                "delta": {
+                    "description": "Value delta for counters.\n\nrequired: false",
+                    "type": "integer"
+                },
+                "id": {
+                    "description": "Metric name or identifier.\n\nrequired: true",
+                    "type": "string"
+                },
+                "type": {
+                    "description": "Metric type: \"counter\" or \"gauge\".\n\nrequired: true",
+                    "type": "string"
+                },
+                "updated_at": {
+                    "description": "Last update timestamp (read-only).\n\nread only: true",
+                    "type": "string"
+                },
+                "value": {
+                    "description": "Current value for gauges.\n\nrequired: false",
+                    "type": "number"
+                }
+            }
+        }
+    }
+}
