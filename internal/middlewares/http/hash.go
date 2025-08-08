@@ -12,7 +12,7 @@ import (
 // NewHashMiddleware creates a middleware handler that verifies request body HMAC SHA256
 // and adds response body HMAC SHA256 in the configured header.
 // If the key is empty, the middleware skips all processing.
-func HashMiddleware(key string) func(http.Handler) http.Handler {
+func HashMiddleware(key, header string) func(http.Handler) http.Handler {
 	return func(next http.Handler) http.Handler {
 		if key == "" {
 			return next
@@ -27,7 +27,7 @@ func HashMiddleware(key string) func(http.Handler) http.Handler {
 			r.Body.Close()
 			r.Body = io.NopCloser(bytes.NewBuffer(bodyBytes))
 
-			receivedHash := r.Header.Get("HashSHA256")
+			receivedHash := r.Header.Get(header)
 			if receivedHash != "" {
 				expectedHash := computeHash(key, bodyBytes)
 				if !hmac.Equal([]byte(receivedHash), []byte(expectedHash)) {
@@ -46,7 +46,7 @@ func HashMiddleware(key string) func(http.Handler) http.Handler {
 			responseBody := rw.buf.Bytes()
 			respHash := computeHash(key, responseBody)
 
-			w.Header().Set("HashSHA256", respHash)
+			w.Header().Set(header, respHash)
 			w.Write(responseBody)
 		})
 	}

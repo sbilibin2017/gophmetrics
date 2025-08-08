@@ -21,11 +21,12 @@ func computeHMAC(data []byte, key string) string {
 
 func TestHashMiddleware_ValidRequestAndResponseHash(t *testing.T) {
 	key := "mysecretkey"
+	header := "HashSHA256"
 	body := []byte(`{"valid":"json"}`)
 	hash := computeHMAC(body, key)
 
 	req := httptest.NewRequest(http.MethodPost, "/", bytes.NewReader(body))
-	req.Header.Set("HashSHA256", hash)
+	req.Header.Set(header, hash)
 
 	rr := httptest.NewRecorder()
 
@@ -33,21 +34,22 @@ func TestHashMiddleware_ValidRequestAndResponseHash(t *testing.T) {
 		_, _ = w.Write([]byte(`response-ok`))
 	})
 
-	HashMiddleware(key)(handler).ServeHTTP(rr, req)
+	HashMiddleware(key, header)(handler).ServeHTTP(rr, req)
 
 	assert.Equal(t, http.StatusOK, rr.Code)
 	assert.Equal(t, "response-ok", rr.Body.String())
 
 	expectedRespHash := computeHMAC([]byte("response-ok"), key)
-	assert.Equal(t, expectedRespHash, rr.Header().Get("HashSHA256"))
+	assert.Equal(t, expectedRespHash, rr.Header().Get(header))
 }
 
 func TestHashMiddleware_InvalidRequestHash(t *testing.T) {
 	key := "mysecretkey"
+	header := "HashSHA256"
 	body := []byte(`{"invalid":"hash"}`)
 
 	req := httptest.NewRequest(http.MethodPost, "/", bytes.NewReader(body))
-	req.Header.Set("HashSHA256", "wronghashvalue")
+	req.Header.Set(header, "wronghashvalue")
 
 	rr := httptest.NewRecorder()
 
@@ -56,7 +58,7 @@ func TestHashMiddleware_InvalidRequestHash(t *testing.T) {
 		called = true
 	})
 
-	HashMiddleware(key)(handler).ServeHTTP(rr, req)
+	HashMiddleware(key, header)(handler).ServeHTTP(rr, req)
 
 	assert.False(t, called, "handler should not be called with invalid hash")
 	assert.Equal(t, http.StatusBadRequest, rr.Code)
@@ -64,6 +66,7 @@ func TestHashMiddleware_InvalidRequestHash(t *testing.T) {
 
 func TestHashMiddleware_MissingHashHeader(t *testing.T) {
 	key := "mysecretkey"
+	header := "HashSHA256"
 	body := []byte(`{"no":"hash"}`)
 
 	req := httptest.NewRequest(http.MethodPost, "/", bytes.NewReader(body))
@@ -73,16 +76,17 @@ func TestHashMiddleware_MissingHashHeader(t *testing.T) {
 		_, _ = w.Write([]byte("ok-missing-hash"))
 	})
 
-	HashMiddleware(key)(handler).ServeHTTP(rr, req)
+	HashMiddleware(key, header)(handler).ServeHTTP(rr, req)
 
 	assert.Equal(t, http.StatusOK, rr.Code)
 	assert.Equal(t, "ok-missing-hash", rr.Body.String())
 
 	expected := computeHMAC([]byte("ok-missing-hash"), key)
-	assert.Equal(t, expected, rr.Header().Get("HashSHA256"))
+	assert.Equal(t, expected, rr.Header().Get(header))
 }
 
 func TestHashMiddleware_EmptyKey_SkipsMiddleware(t *testing.T) {
+	header := "HashSHA256"
 	body := []byte(`{"skip":"middleware"}`)
 
 	req := httptest.NewRequest(http.MethodPost, "/", bytes.NewReader(body))
@@ -94,16 +98,17 @@ func TestHashMiddleware_EmptyKey_SkipsMiddleware(t *testing.T) {
 		_, _ = w.Write([]byte("skipped"))
 	})
 
-	HashMiddleware("")(handler).ServeHTTP(rr, req)
+	HashMiddleware("", header)(handler).ServeHTTP(rr, req)
 
 	assert.True(t, called)
 	assert.Equal(t, http.StatusOK, rr.Code)
 	assert.Equal(t, "skipped", rr.Body.String())
-	assert.Empty(t, rr.Header().Get("HashSHA256"))
+	assert.Empty(t, rr.Header().Get(header))
 }
 
 func TestHashMiddleware_BrokenBody(t *testing.T) {
 	key := "mysecretkey"
+	header := "HashSHA256"
 
 	req := httptest.NewRequest(http.MethodPost, "/", brokenReader{})
 	rr := httptest.NewRecorder()
@@ -112,7 +117,7 @@ func TestHashMiddleware_BrokenBody(t *testing.T) {
 		t.Fatal("handler should not be called when body is unreadable")
 	})
 
-	HashMiddleware(key)(handler).ServeHTTP(rr, req)
+	HashMiddleware(key, header)(handler).ServeHTTP(rr, req)
 
 	assert.Equal(t, http.StatusBadRequest, rr.Code)
 }
