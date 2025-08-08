@@ -19,8 +19,12 @@ import (
 	"github.com/spf13/pflag"
 )
 
-// main parses flags and starts the agent.
+// main is the application entry point.
+// It prints build info, parses flags and environment variables,
+// and starts the agent based on the provided configuration.
 func main() {
+	printBuildInfo()
+
 	if err := parseFlags(); err != nil {
 		log.Fatal(err)
 	}
@@ -30,6 +34,25 @@ func main() {
 	}
 }
 
+// Build information variables.
+// These are set during build time via ldflags.
+var (
+	// buildVersion holds the build version of the application.
+	buildVersion string = "N/A"
+	// buildDate holds the build date of the application.
+	buildDate string = "N/A"
+	// buildCommit holds the git commit hash of the build.
+	buildCommit string = "N/A"
+)
+
+// printBuildInfo prints the build version, date, and commit hash to stdout.
+func printBuildInfo() {
+	fmt.Printf("Build version: %s\n", buildVersion)
+	fmt.Printf("Build date: %s\n", buildDate)
+	fmt.Printf("Build commit: %s\n", buildCommit)
+}
+
+// Application flags and configuration variables.
 var (
 	addr           string                // Server URL address
 	pollInterval   int                   // Poll interval in seconds
@@ -39,6 +62,7 @@ var (
 	limit          int                   // Max number of concurrent outbound requests
 )
 
+// init initializes CLI flags with default values.
 func init() {
 	pflag.StringVarP(&addr, "address", "a", "http://localhost:8080", "server URL")
 	pflag.IntVarP(&pollInterval, "poll-interval", "p", 2, "poll interval in seconds")
@@ -49,7 +73,7 @@ func init() {
 
 // parseFlags parses CLI flags and environment variables.
 // Environment variables override flags if set.
-// Supported env vars: ADDRESS, POLL_INTERVAL, REPORT_INTERVAL, KEY, and RATE_LIMIT.
+// Supported environment variables: ADDRESS, POLL_INTERVAL, REPORT_INTERVAL, KEY, RATE_LIMIT.
 func parseFlags() error {
 	pflag.Parse()
 
@@ -91,7 +115,9 @@ func parseFlags() error {
 	return nil
 }
 
-// run starts the agent based on the scheme of the provided address.
+// run determines which transport scheme to use (HTTP, HTTPS, gRPC),
+// then starts the agent accordingly.
+// Currently, only HTTP is implemented.
 func run(ctx context.Context) error {
 	parsedAddr := address.New(addr)
 	switch parsedAddr.Scheme {
@@ -106,7 +132,10 @@ func run(ctx context.Context) error {
 	}
 }
 
-// runHTTP runs the agent using the HTTP transport.
+// runHTTP starts the agent using HTTP transport.
+// It initializes the HTTP client with retry policy,
+// sets up poll and report tickers, handles graceful shutdown,
+// and calls agent.Run to start polling and reporting metrics.
 func runHTTP(ctx context.Context) error {
 	client := httpClient.New(
 		addr,

@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"errors"
+	"fmt"
 	"log"
 	"net/http"
 	"os"
@@ -30,13 +31,34 @@ import (
 
 // Application entry point.
 func main() {
+	printBuildInfo()
+
 	err := parseFlags()
 	if err != nil {
 		log.Fatal(err)
 	}
+
 	if err := run(context.Background()); err != nil {
 		log.Fatal(err)
 	}
+}
+
+// Build information variables.
+// These are set during build time via ldflags.
+var (
+	// buildVersion holds the build version of the application.
+	buildVersion string = "N/A"
+	// buildDate holds the build date of the application.
+	buildDate string = "N/A"
+	// buildCommit holds the git commit hash of the build.
+	buildCommit string = "N/A"
+)
+
+// printBuildInfo prints the build version, date, and commit hash to stdout.
+func printBuildInfo() {
+	fmt.Printf("Build version: %s\n", buildVersion)
+	fmt.Printf("Build date: %s\n", buildDate)
+	fmt.Printf("Build commit: %s\n", buildCommit)
 }
 
 var (
