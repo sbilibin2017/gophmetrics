@@ -29,6 +29,7 @@ type MetricHTTPFacade struct {
 	cryptor    Cryptor
 	header     string
 	endpoint   string
+	ip         string // добавлено поле для IP
 }
 
 // NewMetricHTTPFacade creates a new MetricHTTPFacade with the given REST client,
@@ -41,6 +42,7 @@ func NewMetricHTTPFacade(
 	key string,
 	header string,
 	endpoint string,
+	ip string, // IP агента передается сюда
 ) *MetricHTTPFacade {
 	return &MetricHTTPFacade{
 		client:     client,
@@ -49,6 +51,7 @@ func NewMetricHTTPFacade(
 		cryptor:    cryptor,
 		header:     header,
 		endpoint:   endpoint,
+		ip:         ip, // сохранили IP в структуре
 	}
 }
 
@@ -77,6 +80,10 @@ func (f *MetricHTTPFacade) Update(ctx context.Context, metrics []*models.Metrics
 		SetHeader("Content-Type", "application/json").
 		SetHeader("Content-Encoding", "gzip").
 		SetBody(compressedData)
+
+	if f.ip != "" {
+		req.SetHeader("X-Real-IP", f.ip)
+	}
 
 	if f.header != "" && f.hasher != nil {
 		hash := f.hasher.Hash(jsonData)
