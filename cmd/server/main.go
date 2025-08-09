@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"log"
@@ -61,28 +62,29 @@ func printBuildInfo() {
 
 var (
 	addr            string
-	storeInterval   int
+	storeInterval   string
 	fileStoragePath string
-	restore         bool
+	restore         string
 	databaseDSN     string
 	migrationsDir   string = "migrations"
 	key             string
 	keyHeader       string = "HashSHA256"
 	cryptoKeyPath   string
+	configFilePath  string
 )
 
 // init sets up command-line flags.
 func init() {
 	pflag.StringVarP(&addr, "address", "a", "localhost:8080", "server URL")
-	pflag.IntVarP(&storeInterval, "interval", "i", 300, "interval in seconds to save metrics (0 = sync save)")
+	pflag.StringVarP(&storeInterval, "interval", "i", "300", "interval in seconds to save metrics (0 = sync save)")
 	pflag.StringVarP(&fileStoragePath, "file", "f", "metrics.json", "file path to store metrics")
-	pflag.BoolVarP(&restore, "restore", "r", true, "restore metrics from file on startup")
+	pflag.StringVarP(&restore, "restore", "r", "", "restore metrics from file on startup")
 	pflag.StringVarP(&databaseDSN, "database-dsn", "d", "", "PostgreSQL DSN connection string")
 	pflag.StringVarP(&key, "key", "k", "", "key for SHA256 hashing")
-	pflag.StringVar(&cryptoKeyPath, "crypto-key", "c", "path to file with private key for hashing")
+	pflag.StringVar(&cryptoKeyPath, "crypto-key", "", "path to file with private key for hashing")
+	pflag.StringVarP(&configFilePath, "config", "c", "", "path to JSON config file")
 }
 
-// parseFlags parses CLI flags and environment variables.
 func parseFlags() error {
 	pflag.Parse()
 
@@ -90,29 +92,61 @@ func parseFlags() error {
 		return errors.New("unknown flags or arguments are provided")
 	}
 
-	// Читаем из окружения (env) с приоритетом ниже чем флаги
+	if env := os.Getenv("CONFIG"); env != "" && configFilePath == "" {
+		configFilePath = env
+	}
+
+	if configFilePath != "" {
+		cfgBytes, err := os.ReadFile(configFilePath)
+		if err != nil {
+			return fmt.Errorf("error reading config file: %w", err)
+		}
+
+		var cfg struct {
+			Address       *string `json:"address,omitempty"`
+			Restore       *string `json:"restore,omitempty"`        // строка
+			StoreInterval *string `json:"store_interval,omitempty"` // строка
+			StoreFile     *string `json:"store_file,omitempty"`
+			DatabaseDSN   *string `json:"database_dsn,omitempty"`
+			CryptoKey     *string `json:"crypto_key,omitempty"`
+		}
+
+		if err := json.Unmarshal(cfgBytes, &cfg); err != nil {
+			return fmt.Errorf("error parsing config JSON: %w", err)
+		}
+
+		if addr == "" && cfg.Address != nil {
+			addr = *cfg.Address
+		}
+		if restore == "" && cfg.Restore != nil {
+			restore = *cfg.Restore
+		}
+		if storeInterval == "" && cfg.StoreInterval != nil {
+			storeInterval = *cfg.StoreInterval
+		}
+		if fileStoragePath == "" && cfg.StoreFile != nil {
+			fileStoragePath = *cfg.StoreFile
+		}
+		if databaseDSN == "" && cfg.DatabaseDSN != nil {
+			databaseDSN = *cfg.DatabaseDSN
+		}
+		if cryptoKeyPath == "" && cfg.CryptoKey != nil {
+			cryptoKeyPath = *cfg.CryptoKey
+		}
+	}
+
+	// env vars - имеют приоритет выше конфигурационного файла
 	if env := os.Getenv("ADDRESS"); env != "" {
 		addr = env
 	}
 	if env := os.Getenv("STORE_INTERVAL"); env != "" {
-		i, err := strconv.Atoi(env)
-		if err != nil {
-			return errors.New("invalid STORE_INTERVAL env variable")
-		}
-		storeInterval = i
+		storeInterval = env
 	}
 	if env := os.Getenv("FILE_STORAGE_PATH"); env != "" {
 		fileStoragePath = env
 	}
 	if env := os.Getenv("RESTORE"); env != "" {
-		switch strings.ToLower(env) {
-		case "true":
-			restore = true
-		case "false":
-			restore = false
-		default:
-			return errors.New("invalid RESTORE env value, must be true or false")
-		}
+		restore = env
 	}
 	if env := os.Getenv("DATABASE_DSN"); env != "" {
 		databaseDSN = env
@@ -120,9 +154,22 @@ func parseFlags() error {
 	if env := os.Getenv("KEY"); env != "" {
 		key = env
 	}
-
 	if env := os.Getenv("CRYPTO_KEY"); env != "" {
 		cryptoKeyPath = env
+	}
+
+	if restore != "" {
+		switch strings.ToLower(restore) {
+		case "true", "false":
+		default:
+			return errors.New("invalid restore value, must be 'true' or 'false'")
+		}
+	}
+
+	if storeInterval != "" {
+		if _, err := strconv.Atoi(storeInterval); err != nil {
+			return errors.New("invalid store_interval value, must be integer seconds string")
+		}
 	}
 
 	return nil
@@ -135,13 +182,13 @@ func run(ctx context.Context) error {
 	case address.SchemeHTTP:
 		switch {
 		case databaseDSN != "" && fileStoragePath != "":
-			return runDBWithWorkerHTTP(ctx, addr, storeInterval, fileStoragePath, restore, databaseDSN, migrationsDir, key)
+			return runDBWithWorkerHTTP(ctx, addr)
 		case databaseDSN != "" && fileStoragePath == "":
-			return runDBHTTP(ctx, addr, databaseDSN, migrationsDir, key)
+			return runDBHTTP(ctx, addr)
 		case fileStoragePath != "":
-			return runFileHTTP(ctx, addr, storeInterval, fileStoragePath, restore, key)
+			return runFileHTTP(ctx, addr)
 		default:
-			return runMemoryHTTP(ctx, addr, key)
+			return runMemoryHTTP(ctx, addr)
 		}
 	default:
 		return address.ErrUnsupportedScheme
@@ -149,7 +196,7 @@ func run(ctx context.Context) error {
 }
 
 // runMemoryHTTP starts a server using in-memory metric storage.
-func runMemoryHTTP(ctx context.Context, addr string, key string) error {
+func runMemoryHTTP(ctx context.Context, addr string) error {
 	data := make(map[models.MetricID]models.Metrics)
 	writer := memory.NewMetricWriteRepository(data)
 	reader := memory.NewMetricReadRepository(data)
@@ -189,9 +236,9 @@ func runMemoryHTTP(ctx context.Context, addr string, key string) error {
 }
 
 // runFileHTTP starts a server using file-based metric storage and periodic sync.
-func runFileHTTP(ctx context.Context, addr string, storeInterval int, filePath string, restore bool, key string) error {
-	writer := file.NewMetricWriteRepository(filePath)
-	reader := file.NewMetricReadRepository(filePath)
+func runFileHTTP(ctx context.Context, addr string) error {
+	writer := file.NewMetricWriteRepository(fileStoragePath) // FIX: use fileStoragePath, not filePath
+	reader := file.NewMetricReadRepository(fileStoragePath)  // FIX: same here
 	service := services.NewMetricService(writer, reader)
 
 	hasher := hasher.New(key)
@@ -209,10 +256,17 @@ func runFileHTTP(ctx context.Context, addr string, storeInterval int, filePath s
 	r.Get("/", httpHandlers.NewMetricListHTMLHandler(service))
 
 	server := &http.Server{Addr: addr, Handler: r}
+
 	var ticker *time.Ticker
-	if storeInterval > 0 {
-		ticker = time.NewTicker(time.Duration(storeInterval) * time.Second)
+	intervalSeconds, _ := strconv.Atoi(storeInterval) // FIX: parse interval here once
+	if intervalSeconds > 0 {
+		ticker = time.NewTicker(time.Duration(intervalSeconds) * time.Second)
 		defer ticker.Stop()
+	}
+
+	var restoreBool bool
+	if restore == "true" {
+		restoreBool = true
 	}
 
 	errCh := make(chan error, 2)
@@ -220,7 +274,7 @@ func runFileHTTP(ctx context.Context, addr string, storeInterval int, filePath s
 	wg.Add(1)
 	go func() {
 		defer wg.Done()
-		if err := worker.Run(ctx, restore, ticker, reader, writer, reader, writer); err != nil {
+		if err := worker.Run(ctx, restoreBool, ticker, reader, writer, reader, writer); err != nil {
 			errCh <- err
 		}
 	}()
@@ -244,8 +298,8 @@ func runFileHTTP(ctx context.Context, addr string, storeInterval int, filePath s
 }
 
 // runDBHTTP starts a server using PostgreSQL-based storage with health check.
-func runDBHTTP(ctx context.Context, addr, dsn, migrationsDir, key string) error {
-	dbConn, err := db.New("pgx", dsn)
+func runDBHTTP(ctx context.Context, addr string) error {
+	dbConn, err := db.New("pgx", databaseDSN) // FIX: use databaseDSN, not dsn
 	if err != nil {
 		return err
 	}
@@ -294,8 +348,8 @@ func runDBHTTP(ctx context.Context, addr, dsn, migrationsDir, key string) error 
 }
 
 // runDBWithWorkerHTTP runs a PostgreSQL-backed server with file-based persistence worker.
-func runDBWithWorkerHTTP(ctx context.Context, addr string, storeInterval int, filePath string, restore bool, dsn string, migrationsDir string, key string) error {
-	dbConn, err := db.New("pgx", dsn)
+func runDBWithWorkerHTTP(ctx context.Context, addr string) error {
+	dbConn, err := db.New("pgx", databaseDSN) // FIX: use databaseDSN
 	if err != nil {
 		return err
 	}
@@ -309,8 +363,8 @@ func runDBWithWorkerHTTP(ctx context.Context, addr string, storeInterval int, fi
 	reader := dbRepo.NewMetricReadRepository(dbConn)
 	service := services.NewMetricService(writer, reader)
 
-	writerFile := file.NewMetricWriteRepository(filePath)
-	readerFile := file.NewMetricReadRepository(filePath)
+	writerFile := file.NewMetricWriteRepository(fileStoragePath) // FIX: use fileStoragePath
+	readerFile := file.NewMetricReadRepository(fileStoragePath)  // FIX: same here
 
 	hasher := hasher.New(key)
 
@@ -328,10 +382,17 @@ func runDBWithWorkerHTTP(ctx context.Context, addr string, storeInterval int, fi
 	r.Get("/ping", newDBPingHandler(dbConn))
 
 	server := &http.Server{Addr: addr, Handler: r}
+
 	var ticker *time.Ticker
-	if storeInterval > 0 {
-		ticker = time.NewTicker(time.Duration(storeInterval) * time.Second)
+	intervalSeconds, _ := strconv.Atoi(storeInterval) // FIX: parse interval
+	if intervalSeconds > 0 {
+		ticker = time.NewTicker(time.Duration(intervalSeconds) * time.Second)
 		defer ticker.Stop()
+	}
+
+	var restoreBool bool
+	if restore == "true" {
+		restoreBool = true
 	}
 
 	errCh := make(chan error, 2)
@@ -339,7 +400,7 @@ func runDBWithWorkerHTTP(ctx context.Context, addr string, storeInterval int, fi
 	wg.Add(1)
 	go func() {
 		defer wg.Done()
-		if err := worker.Run(ctx, restore, ticker, reader, writer, readerFile, writerFile); err != nil {
+		if err := worker.Run(ctx, restoreBool, ticker, reader, writer, readerFile, writerFile); err != nil {
 			errCh <- err
 		}
 	}()
