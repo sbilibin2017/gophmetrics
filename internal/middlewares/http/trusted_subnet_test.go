@@ -11,7 +11,6 @@ import (
 func TestTrustedSubnetMiddleware(t *testing.T) {
 	const validCIDR = "192.168.1.0/24"
 
-	// handler to test if next was called
 	nextCalled := false
 	nextHandler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		nextCalled = true
@@ -28,6 +27,7 @@ func TestTrustedSubnetMiddleware(t *testing.T) {
 
 		handler.ServeHTTP(w, req)
 		resp := w.Result()
+		defer resp.Body.Close()
 
 		assert.Equal(t, http.StatusOK, resp.StatusCode)
 		assert.True(t, nextCalled)
@@ -44,6 +44,7 @@ func TestTrustedSubnetMiddleware(t *testing.T) {
 
 		handler.ServeHTTP(w, req)
 		resp := w.Result()
+		defer resp.Body.Close()
 
 		assert.Equal(t, http.StatusOK, resp.StatusCode)
 		assert.True(t, nextCalled)
@@ -60,6 +61,7 @@ func TestTrustedSubnetMiddleware(t *testing.T) {
 
 		handler.ServeHTTP(w, req)
 		resp := w.Result()
+		defer resp.Body.Close()
 
 		assert.Equal(t, http.StatusForbidden, resp.StatusCode)
 		assert.False(t, nextCalled)
@@ -75,6 +77,7 @@ func TestTrustedSubnetMiddleware(t *testing.T) {
 
 		handler.ServeHTTP(w, req)
 		resp := w.Result()
+		defer resp.Body.Close()
 
 		assert.Equal(t, http.StatusForbidden, resp.StatusCode)
 		assert.False(t, nextCalled)
@@ -90,6 +93,7 @@ func TestTrustedSubnetMiddleware(t *testing.T) {
 
 		handler.ServeHTTP(w, req)
 		resp := w.Result()
+		defer resp.Body.Close()
 
 		assert.Equal(t, http.StatusInternalServerError, resp.StatusCode)
 	})
