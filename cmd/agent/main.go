@@ -2,15 +2,15 @@ package main
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"log"
 	"os"
+	"os/signal"
 	"strconv"
 	"syscall"
 	"time"
-
-	"os/signal"
 
 	"github.com/sbilibin2017/gophmetrics/internal/agent"
 	"github.com/sbilibin2017/gophmetrics/internal/configs/address"
@@ -22,13 +22,12 @@ import (
 	"github.com/spf13/pflag"
 )
 
-// main is the application entry point.
-// It prints build info, parses flags and environment variables,
-// and starts the agent based on the provided configuration.
+// Application entry point.
 func main() {
 	printBuildInfo()
 
-	if err := parseFlags(); err != nil {
+	err := parseFlags()
+	if err != nil {
 		log.Fatal(err)
 	}
 
@@ -40,12 +39,9 @@ func main() {
 // Build information variables.
 // These are set during build time via ldflags.
 var (
-	// buildVersion holds the build version of the application.
 	buildVersion string = "N/A"
-	// buildDate holds the build date of the application.
-	buildDate string = "N/A"
-	// buildCommit holds the git commit hash of the build.
-	buildCommit string = "N/A"
+	buildDate    string = "N/A"
+	buildCommit  string = "N/A"
 )
 
 // printBuildInfo prints the build version, date, and commit hash to stdout.
@@ -57,22 +53,24 @@ func printBuildInfo() {
 
 var (
 	addr           string
-	pollInterval   int
-	reportInterval int
+	pollInterval   string
+	reportInterval string
 	key            string
 	keyHeader      string = "HashSHA256"
-	limit          int
+	limit          string
 	cryptoKeyPath  string
 	endpoint       string = "/updates/"
+	configFilePath string
 )
 
 func init() {
 	pflag.StringVarP(&addr, "address", "a", "http://localhost:8080", "server URL")
-	pflag.IntVarP(&pollInterval, "poll-interval", "p", 2, "poll interval in seconds")
-	pflag.IntVarP(&reportInterval, "report-interval", "r", 10, "report interval in seconds")
+	pflag.StringVarP(&pollInterval, "poll-interval", "p", "2", "poll interval in seconds")
+	pflag.StringVarP(&reportInterval, "report-interval", "r", "10", "report interval in seconds")
 	pflag.StringVarP(&key, "key", "k", "", "key for SHA256 hashing")
-	pflag.IntVarP(&limit, "limit", "l", 5, "max number of concurrent outbound requests")
-	pflag.StringVar(&cryptoKeyPath, "crypto-key", "c", "path to PEM file with public key")
+	pflag.StringVarP(&limit, "limit", "l", "5", "max number of concurrent outbound requests")
+	pflag.StringVar(&cryptoKeyPath, "crypto-key", "", "path to PEM file with public key")
+	pflag.StringVarP(&configFilePath, "config", "c", "", "path to JSON config file")
 }
 
 func parseFlags() error {
@@ -82,38 +80,87 @@ func parseFlags() error {
 		return errors.New("unknown flags or arguments are provided")
 	}
 
+	// Load config file if set
+	if env := os.Getenv("CONFIG"); env != "" && configFilePath == "" {
+		configFilePath = env
+	}
+
+	if configFilePath != "" {
+		cfgBytes, err := os.ReadFile(configFilePath)
+		if err != nil {
+			return fmt.Errorf("error reading config file: %w", err)
+		}
+
+		var cfg struct {
+			Address        *string `json:"address,omitempty"`
+			PollInterval   *string `json:"poll_interval,omitempty"`
+			ReportInterval *string `json:"report_interval,omitempty"`
+			Key            *string `json:"key,omitempty"`
+			Limit          *string `json:"limit,omitempty"`
+			CryptoKey      *string `json:"crypto_key,omitempty"`
+		}
+
+		if err := json.Unmarshal(cfgBytes, &cfg); err != nil {
+			return fmt.Errorf("error parsing config JSON: %w", err)
+		}
+
+		if addr == "" && cfg.Address != nil {
+			addr = *cfg.Address
+		}
+		if pollInterval == "" && cfg.PollInterval != nil {
+			pollInterval = *cfg.PollInterval
+		}
+		if reportInterval == "" && cfg.ReportInterval != nil {
+			reportInterval = *cfg.ReportInterval
+		}
+		if key == "" && cfg.Key != nil {
+			key = *cfg.Key
+		}
+		if limit == "" && cfg.Limit != nil {
+			limit = *cfg.Limit
+		}
+		if cryptoKeyPath == "" && cfg.CryptoKey != nil {
+			cryptoKeyPath = *cfg.CryptoKey
+		}
+	}
+
 	if env := os.Getenv("ADDRESS"); env != "" {
 		addr = env
 	}
 	if env := os.Getenv("POLL_INTERVAL"); env != "" {
-		i, err := strconv.Atoi(env)
-		if err != nil {
-			return errors.New("invalid POLL_INTERVAL env variable")
-		}
-		pollInterval = i
+		pollInterval = env
 	}
 	if env := os.Getenv("REPORT_INTERVAL"); env != "" {
-		i, err := strconv.Atoi(env)
-		if err != nil {
-			return errors.New("invalid REPORT_INTERVAL env variable")
-		}
-		reportInterval = i
+		reportInterval = env
 	}
 	if env := os.Getenv("KEY"); env != "" {
 		key = env
 	}
 	if env := os.Getenv("RATE_LIMIT"); env != "" {
-		i, err := strconv.Atoi(env)
-		if err != nil {
-			return errors.New("invalid RATE_LIMIT env variable")
-		}
-		if i <= 0 {
-			return errors.New("rate limit must be greater than 0")
-		}
-		limit = i
+		limit = env
 	}
 	if env := os.Getenv("CRYPTO_KEY"); env != "" {
 		cryptoKeyPath = env
+	}
+
+	if pollInterval != "" {
+		if _, err := strconv.Atoi(pollInterval); err != nil {
+			return errors.New("invalid poll_interval value, must be integer seconds string")
+		}
+	}
+	if reportInterval != "" {
+		if _, err := strconv.Atoi(reportInterval); err != nil {
+			return errors.New("invalid report_interval value, must be integer seconds string")
+		}
+	}
+	if limit != "" {
+		i, err := strconv.Atoi(limit)
+		if err != nil {
+			return errors.New("invalid limit value, must be an integer")
+		}
+		if i <= 0 {
+			return errors.New("limit must be greater than 0")
+		}
 	}
 
 	return nil
@@ -134,6 +181,10 @@ func run(ctx context.Context) error {
 }
 
 func runHTTP(ctx context.Context) error {
+	pollInt, _ := strconv.Atoi(pollInterval)
+	reportInt, _ := strconv.Atoi(reportInterval)
+	limitInt, _ := strconv.Atoi(limit)
+
 	client := httpClient.New(
 		addr,
 		httpClient.WithRetryPolicy(
@@ -152,8 +203,10 @@ func runHTTP(ctx context.Context) error {
 
 	c := compressor.NewCompressor()
 
-	var cr *cryptor.Cryptor
-	var err error
+	var (
+		cr  *cryptor.Cryptor
+		err error
+	)
 	if cryptoKeyPath != "" {
 		cr, err = cryptor.New(cryptor.WithPublicKeyPath(cryptoKeyPath))
 		if err != nil {
@@ -163,14 +216,14 @@ func runHTTP(ctx context.Context) error {
 
 	updater := httpFacades.NewMetricHTTPFacade(client, c, h, cr, key, keyHeader, endpoint)
 
-	pollTicker := time.NewTicker(time.Duration(pollInterval) * time.Second)
+	pollTicker := time.NewTicker(time.Duration(pollInt) * time.Second)
 	defer pollTicker.Stop()
 
-	reportTicker := time.NewTicker(time.Duration(reportInterval) * time.Second)
+	reportTicker := time.NewTicker(time.Duration(reportInt) * time.Second)
 	defer reportTicker.Stop()
 
 	ctx, stop := signal.NotifyContext(ctx, os.Interrupt, syscall.SIGTERM, syscall.SIGINT)
 	defer stop()
 
-	return agent.Run(ctx, updater, pollTicker, reportTicker, limit)
+	return agent.Run(ctx, updater, pollTicker, reportTicker, limitInt)
 }
