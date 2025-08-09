@@ -3,6 +3,7 @@ package http
 import (
 	"context"
 	"errors"
+	"fmt"
 	"net"
 	"net/http"
 	"testing"
@@ -22,6 +23,22 @@ type mockRoundTripper struct {
 func (m *mockRoundTripper) RoundTrip(req *http.Request) (*http.Response, error) {
 	return &http.Response{
 		StatusCode: m.statusCode,
+		Body:       http.NoBody,
+	}, nil
+}
+
+// headerCheckRoundTripper checks the X-Real-IP header in the request.
+type headerCheckRoundTripper struct {
+	expectedIP string
+	statusCode int
+}
+
+func (h *headerCheckRoundTripper) RoundTrip(req *http.Request) (*http.Response, error) {
+	if req.Header.Get("X-Real-IP") != h.expectedIP {
+		return nil, fmt.Errorf("missing or wrong X-Real-IP header: got %q, want %q", req.Header.Get("X-Real-IP"), h.expectedIP)
+	}
+	return &http.Response{
+		StatusCode: h.statusCode,
 		Body:       http.NoBody,
 	}, nil
 }
@@ -117,10 +134,12 @@ func TestMetricHTTPFacade_Update(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			client := resty.New()
-			client.SetTransport(&mockRoundTripper{statusCode: tt.httpStatusCode})
+			// Use headerCheckRoundTripper to verify X-Real-IP header in every request
+			client.SetTransport(&headerCheckRoundTripper{
+				expectedIP: "127.0.0.1",
+				statusCode: tt.httpStatusCode,
+			})
 
-			// Only expect Compress if this test case is NOT a marshal error test
-			// (marshal errors will be tested separately)
 			if tt.compressErr != nil {
 				mockCompressor.EXPECT().Compress(gomock.Any()).Return(nil, tt.compressErr).Times(1)
 			} else {
@@ -150,12 +169,12 @@ func TestMetricHTTPFacade_Update(t *testing.T) {
 				mockCompressor,
 				hasher,
 				cryptor,
-				"key",      // dummy key
-				"X-Hash",   // header name for hash
-				"/update/", // endpoint
+				"key",       // dummy key
+				"X-Hash",    // header name for hash
+				"/update/",  // endpoint
+				"127.0.0.1", // IP адрес агента
 			)
 
-			// Cast metricsInput to the expected type ([]*models.Metrics)
 			m, ok := tt.metricsInput.([]*models.Metrics)
 			if !ok {
 				t.Fatalf("invalid type for metricsInput")
@@ -176,8 +195,6 @@ func TestMetricHTTPFacade_Update_PostError(t *testing.T) {
 	defer ctrl.Finish()
 
 	mockCompressor := NewMockCompressor(ctrl)
-	// Don't declare mockHasher if unused
-	// Don't declare mockCryptor if unused
 
 	delta := int64(10)
 	metrics := []*models.Metrics{
@@ -190,12 +207,10 @@ func TestMetricHTTPFacade_Update_PostError(t *testing.T) {
 
 	ln, err := net.Listen("tcp", "127.0.0.1:0")
 	assert.NoError(t, err)
-
-	// Immediately close to cause connection refused
-	ln.Close()
+	ln.Close() // Закрываем, чтобы вызвать ошибку подключения
 
 	client := resty.New()
-	client.SetBaseURL("http://" + ln.Addr().String()) // broken server address
+	client.SetBaseURL("http://" + ln.Addr().String()) // некорректный адрес сервера
 
 	mockCompressor.EXPECT().Compress(gomock.Any()).Return([]byte("compressed"), nil).Times(1)
 
@@ -207,6 +222,7 @@ func TestMetricHTTPFacade_Update_PostError(t *testing.T) {
 		"",
 		"",
 		"/update",
+		"127.0.0.1", // IP адрес агента
 	)
 
 	err = facade.Update(context.Background(), metrics)

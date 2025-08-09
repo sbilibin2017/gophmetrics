@@ -71,6 +71,7 @@ var (
 	keyHeader       string = "HashSHA256"
 	cryptoKeyPath   string
 	configFilePath  string
+	trustedSubnet   string
 )
 
 // init sets up command-line flags.
@@ -83,6 +84,7 @@ func init() {
 	pflag.StringVarP(&key, "key", "k", "", "key for SHA256 hashing")
 	pflag.StringVar(&cryptoKeyPath, "crypto-key", "", "path to file with private key for hashing")
 	pflag.StringVarP(&configFilePath, "config", "c", "", "path to JSON config file")
+	pflag.StringVarP(&trustedSubnet, "trusted-subnet", "t", "", "trusted subnet in CIDR notation")
 }
 
 func parseFlags() error {
@@ -104,11 +106,12 @@ func parseFlags() error {
 
 		var cfg struct {
 			Address       *string `json:"address,omitempty"`
-			Restore       *string `json:"restore,omitempty"`        // строка
-			StoreInterval *string `json:"store_interval,omitempty"` // строка
+			Restore       *string `json:"restore,omitempty"`
+			StoreInterval *string `json:"store_interval,omitempty"`
 			StoreFile     *string `json:"store_file,omitempty"`
 			DatabaseDSN   *string `json:"database_dsn,omitempty"`
 			CryptoKey     *string `json:"crypto_key,omitempty"`
+			TrustedSubnet *string `json:"trusted_subnet,omitempty"`
 		}
 
 		if err := json.Unmarshal(cfgBytes, &cfg); err != nil {
@@ -133,6 +136,9 @@ func parseFlags() error {
 		if cryptoKeyPath == "" && cfg.CryptoKey != nil {
 			cryptoKeyPath = *cfg.CryptoKey
 		}
+		if trustedSubnet == "" && cfg.TrustedSubnet != nil {
+			trustedSubnet = *cfg.TrustedSubnet
+		}
 	}
 
 	// env vars - имеют приоритет выше конфигурационного файла
@@ -156,6 +162,9 @@ func parseFlags() error {
 	}
 	if env := os.Getenv("CRYPTO_KEY"); env != "" {
 		cryptoKeyPath = env
+	}
+	if env := os.Getenv("TRUSTED_SUBNET"); env != "" {
+		trustedSubnet = env
 	}
 
 	if restore != "" {
@@ -208,6 +217,7 @@ func runMemoryHTTP(ctx context.Context, addr string) error {
 	r.Use(httpMiddlewares.LoggingMiddleware)
 	r.Use(httpMiddlewares.GzipMiddleware)
 	r.Use(httpMiddlewares.HashMiddleware(hasher, keyHeader))
+	r.Use(httpMiddlewares.TrustedSubnetMiddleware(trustedSubnet))
 
 	r.Post("/update/{type}/{name}/{value}", httpHandlers.NewMetricUpdatePathHandler(service))
 	r.Post("/update/", httpHandlers.NewMetricUpdateBodyHandler(service))
@@ -237,8 +247,8 @@ func runMemoryHTTP(ctx context.Context, addr string) error {
 
 // runFileHTTP starts a server using file-based metric storage and periodic sync.
 func runFileHTTP(ctx context.Context, addr string) error {
-	writer := file.NewMetricWriteRepository(fileStoragePath) // FIX: use fileStoragePath, not filePath
-	reader := file.NewMetricReadRepository(fileStoragePath)  // FIX: same here
+	writer := file.NewMetricWriteRepository(fileStoragePath)
+	reader := file.NewMetricReadRepository(fileStoragePath)
 	service := services.NewMetricService(writer, reader)
 
 	hasher := hasher.New(key)
@@ -247,6 +257,7 @@ func runFileHTTP(ctx context.Context, addr string) error {
 	r.Use(httpMiddlewares.LoggingMiddleware)
 	r.Use(httpMiddlewares.GzipMiddleware)
 	r.Use(httpMiddlewares.HashMiddleware(hasher, keyHeader))
+	r.Use(httpMiddlewares.TrustedSubnetMiddleware(trustedSubnet))
 
 	r.Post("/update/{type}/{name}/{value}", httpHandlers.NewMetricUpdatePathHandler(service))
 	r.Post("/update/", httpHandlers.NewMetricUpdateBodyHandler(service))
@@ -258,7 +269,7 @@ func runFileHTTP(ctx context.Context, addr string) error {
 	server := &http.Server{Addr: addr, Handler: r}
 
 	var ticker *time.Ticker
-	intervalSeconds, _ := strconv.Atoi(storeInterval) // FIX: parse interval here once
+	intervalSeconds, _ := strconv.Atoi(storeInterval)
 	if intervalSeconds > 0 {
 		ticker = time.NewTicker(time.Duration(intervalSeconds) * time.Second)
 		defer ticker.Stop()
@@ -299,7 +310,7 @@ func runFileHTTP(ctx context.Context, addr string) error {
 
 // runDBHTTP starts a server using PostgreSQL-based storage with health check.
 func runDBHTTP(ctx context.Context, addr string) error {
-	dbConn, err := db.New("pgx", databaseDSN) // FIX: use databaseDSN, not dsn
+	dbConn, err := db.New("pgx", databaseDSN)
 	if err != nil {
 		return err
 	}
@@ -319,6 +330,7 @@ func runDBHTTP(ctx context.Context, addr string) error {
 	r.Use(httpMiddlewares.LoggingMiddleware)
 	r.Use(httpMiddlewares.GzipMiddleware)
 	r.Use(httpMiddlewares.HashMiddleware(hasher, keyHeader))
+	r.Use(httpMiddlewares.TrustedSubnetMiddleware(trustedSubnet))
 
 	r.Post("/update/{type}/{name}/{value}", httpHandlers.NewMetricUpdatePathHandler(service))
 	r.Post("/update/", httpHandlers.NewMetricUpdateBodyHandler(service))
@@ -349,7 +361,7 @@ func runDBHTTP(ctx context.Context, addr string) error {
 
 // runDBWithWorkerHTTP runs a PostgreSQL-backed server with file-based persistence worker.
 func runDBWithWorkerHTTP(ctx context.Context, addr string) error {
-	dbConn, err := db.New("pgx", databaseDSN) // FIX: use databaseDSN
+	dbConn, err := db.New("pgx", databaseDSN)
 	if err != nil {
 		return err
 	}
@@ -363,8 +375,8 @@ func runDBWithWorkerHTTP(ctx context.Context, addr string) error {
 	reader := dbRepo.NewMetricReadRepository(dbConn)
 	service := services.NewMetricService(writer, reader)
 
-	writerFile := file.NewMetricWriteRepository(fileStoragePath) // FIX: use fileStoragePath
-	readerFile := file.NewMetricReadRepository(fileStoragePath)  // FIX: same here
+	writerFile := file.NewMetricWriteRepository(fileStoragePath)
+	readerFile := file.NewMetricReadRepository(fileStoragePath)
 
 	hasher := hasher.New(key)
 
@@ -372,6 +384,7 @@ func runDBWithWorkerHTTP(ctx context.Context, addr string) error {
 	r.Use(httpMiddlewares.LoggingMiddleware)
 	r.Use(httpMiddlewares.GzipMiddleware)
 	r.Use(httpMiddlewares.HashMiddleware(hasher, keyHeader))
+	r.Use(httpMiddlewares.TrustedSubnetMiddleware(trustedSubnet))
 
 	r.Post("/update/{type}/{name}/{value}", httpHandlers.NewMetricUpdatePathHandler(service))
 	r.Post("/update/", httpHandlers.NewMetricUpdateBodyHandler(service))
@@ -384,7 +397,7 @@ func runDBWithWorkerHTTP(ctx context.Context, addr string) error {
 	server := &http.Server{Addr: addr, Handler: r}
 
 	var ticker *time.Ticker
-	intervalSeconds, _ := strconv.Atoi(storeInterval) // FIX: parse interval
+	intervalSeconds, _ := strconv.Atoi(storeInterval)
 	if intervalSeconds > 0 {
 		ticker = time.NewTicker(time.Duration(intervalSeconds) * time.Second)
 		defer ticker.Stop()
@@ -423,10 +436,10 @@ func runDBWithWorkerHTTP(ctx context.Context, addr string) error {
 	return err
 }
 
-// newDBPingHandler returns a health check handler for the database connection.
-func newDBPingHandler(db *sqlx.DB) http.HandlerFunc {
+// newDBPingHandler check db connection.
+func newDBPingHandler(dbConn *sqlx.DB) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		if err := db.PingContext(r.Context()); err != nil {
+		if err := dbConn.Ping(); err != nil {
 			w.WriteHeader(http.StatusInternalServerError)
 			return
 		}

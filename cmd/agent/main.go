@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"log"
+	"net"
 	"os"
 	"os/signal"
 	"strconv"
@@ -22,7 +23,8 @@ import (
 	"github.com/spf13/pflag"
 )
 
-// Application entry point.
+// main is the entry point of the application.
+// It prints build info, parses command-line flags, and runs the agent.
 func main() {
 	printBuildInfo()
 
@@ -36,8 +38,7 @@ func main() {
 	}
 }
 
-// Build information variables.
-// These are set during build time via ldflags.
+// Build information variables set at build time via ldflags.
 var (
 	buildVersion string = "N/A"
 	buildDate    string = "N/A"
@@ -63,6 +64,7 @@ var (
 	configFilePath string
 )
 
+// init registers command-line flags.
 func init() {
 	pflag.StringVarP(&addr, "address", "a", "http://localhost:8080", "server URL")
 	pflag.StringVarP(&pollInterval, "poll-interval", "p", "2", "poll interval in seconds")
@@ -73,6 +75,8 @@ func init() {
 	pflag.StringVarP(&configFilePath, "config", "c", "", "path to JSON config file")
 }
 
+// parseFlags parses command-line flags and environment variables,
+// validates them and loads from config file if specified.
 func parseFlags() error {
 	pflag.Parse()
 
@@ -80,11 +84,12 @@ func parseFlags() error {
 		return errors.New("unknown flags or arguments are provided")
 	}
 
-	// Load config file if set
+	// Load config file path from ENV if not set
 	if env := os.Getenv("CONFIG"); env != "" && configFilePath == "" {
 		configFilePath = env
 	}
 
+	// Load config file if provided
 	if configFilePath != "" {
 		cfgBytes, err := os.ReadFile(configFilePath)
 		if err != nil {
@@ -124,6 +129,7 @@ func parseFlags() error {
 		}
 	}
 
+	// Override with environment variables if set
 	if env := os.Getenv("ADDRESS"); env != "" {
 		addr = env
 	}
@@ -143,6 +149,7 @@ func parseFlags() error {
 		cryptoKeyPath = env
 	}
 
+	// Validate numeric flags
 	if pollInterval != "" {
 		if _, err := strconv.Atoi(pollInterval); err != nil {
 			return errors.New("invalid poll_interval value, must be integer seconds string")
@@ -166,6 +173,7 @@ func parseFlags() error {
 	return nil
 }
 
+// run determines the protocol scheme from the address and runs the appropriate agent.
 func run(ctx context.Context) error {
 	parsedAddr := address.New(addr)
 	switch parsedAddr.Scheme {
@@ -180,6 +188,9 @@ func run(ctx context.Context) error {
 	}
 }
 
+// runHTTP runs the agent in HTTP mode.
+// It configures the HTTP client, optional crypto and hashing, and
+// creates a metric updater with the agent's outbound IP included in X-Real-IP header.
 func runHTTP(ctx context.Context) error {
 	pollInt, _ := strconv.Atoi(pollInterval)
 	reportInt, _ := strconv.Atoi(reportInterval)
@@ -214,7 +225,17 @@ func runHTTP(ctx context.Context) error {
 		}
 	}
 
-	updater := httpFacades.NewMetricHTTPFacade(client, c, h, cr, key, keyHeader, endpoint)
+	// Determine outbound IP address for X-Real-IP header
+	conn, err := net.Dial("udp", "8.8.8.8:80")
+	if err != nil {
+		return fmt.Errorf("failed to determine outbound IP: %w", err)
+	}
+	defer conn.Close()
+	localAddr := conn.LocalAddr().(*net.UDPAddr)
+	agentIP := localAddr.IP.String()
+
+	// Create the MetricHTTPFacade that adds X-Real-IP header with agentIP
+	updater := httpFacades.NewMetricHTTPFacade(client, c, h, cr, key, keyHeader, endpoint, agentIP)
 
 	pollTicker := time.NewTicker(time.Duration(pollInt) * time.Second)
 	defer pollTicker.Stop()
@@ -222,6 +243,7 @@ func runHTTP(ctx context.Context) error {
 	reportTicker := time.NewTicker(time.Duration(reportInt) * time.Second)
 	defer reportTicker.Stop()
 
+	// Listen for system interrupt signals for graceful shutdown
 	ctx, stop := signal.NotifyContext(ctx, os.Interrupt, syscall.SIGTERM, syscall.SIGINT)
 	defer stop()
 
