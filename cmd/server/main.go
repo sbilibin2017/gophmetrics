@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"log"
+	"net"
 	"net/http"
 	"os"
 	"strconv"
@@ -25,10 +26,13 @@ import (
 	"github.com/sbilibin2017/gophmetrics/internal/services"
 	"github.com/sbilibin2017/gophmetrics/internal/worker"
 	"github.com/spf13/pflag"
+	"google.golang.org/grpc"
 
+	grpcHandlers "github.com/sbilibin2017/gophmetrics/internal/handlers/grpc"
 	httpHandlers "github.com/sbilibin2017/gophmetrics/internal/handlers/http"
 	httpMiddlewares "github.com/sbilibin2017/gophmetrics/internal/middlewares/http"
 	dbRepo "github.com/sbilibin2017/gophmetrics/internal/repositories/db"
+	pb "github.com/sbilibin2017/gophmetrics/pkg/grpc"
 )
 
 // Application entry point.
@@ -198,6 +202,17 @@ func run(ctx context.Context) error {
 			return runFileHTTP(ctx, addr)
 		default:
 			return runMemoryHTTP(ctx, addr)
+		}
+	case address.SchemeGRPC:
+		switch {
+		case databaseDSN != "" && fileStoragePath != "":
+			return runDBWithWorkerGRPC(ctx, addr)
+		case databaseDSN != "" && fileStoragePath == "":
+			return runDBGRPC(ctx, addr)
+		case fileStoragePath != "":
+			return runFileGRPC(ctx, addr)
+		default:
+			return runMemoryGRPC(ctx, addr)
 		}
 	default:
 		return address.ErrUnsupportedScheme
@@ -434,6 +449,210 @@ func runDBWithWorkerHTTP(ctx context.Context, addr string) error {
 	err = server.Shutdown(shutdownCtx)
 	wg.Wait()
 	return err
+}
+
+// runMemoryGRPC starts a gRPC server using in-memory metric storage.
+func runMemoryGRPC(ctx context.Context, addr string) error {
+	data := make(map[models.MetricID]models.Metrics)
+	writer := memory.NewMetricWriteRepository(data)
+	reader := memory.NewMetricReadRepository(data)
+	service := services.NewMetricService(writer, reader)
+
+	metricWriteHandler := grpcHandlers.NewMetricWriteHandler(service)
+	metricReadHandler := grpcHandlers.NewMetricReadHandler(service, service)
+
+	grpcServer := grpc.NewServer()
+	pb.RegisterMetricWriteServiceServer(grpcServer, metricWriteHandler)
+	pb.RegisterMetricReadServiceServer(grpcServer, metricReadHandler)
+
+	lis, err := net.Listen("tcp", addr)
+	if err != nil {
+		return fmt.Errorf("failed to listen on %s: %w", addr, err)
+	}
+
+	errCh := make(chan error, 1)
+	go func() {
+		if err := grpcServer.Serve(lis); err != nil {
+			errCh <- err
+		}
+	}()
+
+	select {
+	case <-ctx.Done():
+		grpcServer.GracefulStop()
+		return nil
+	case err := <-errCh:
+		return err
+	}
+}
+
+// runFileGRPC starts a gRPC server using file-based metric storage.
+func runFileGRPC(ctx context.Context, addr string) error {
+	writer := file.NewMetricWriteRepository(fileStoragePath)
+	reader := file.NewMetricReadRepository(fileStoragePath)
+	service := services.NewMetricService(writer, reader)
+
+	metricWriteHandler := grpcHandlers.NewMetricWriteHandler(service)
+	metricReadHandler := grpcHandlers.NewMetricReadHandler(service, service)
+
+	grpcServer := grpc.NewServer()
+	pb.RegisterMetricWriteServiceServer(grpcServer, metricWriteHandler)
+	pb.RegisterMetricReadServiceServer(grpcServer, metricReadHandler)
+
+	lis, err := net.Listen("tcp", addr)
+	if err != nil {
+		return fmt.Errorf("failed to listen on %s: %w", addr, err)
+	}
+
+	var ticker *time.Ticker
+	intervalSeconds, _ := strconv.Atoi(storeInterval)
+	if intervalSeconds > 0 {
+		ticker = time.NewTicker(time.Duration(intervalSeconds) * time.Second)
+		defer ticker.Stop()
+	}
+
+	var restoreBool bool
+	if restore == "true" {
+		restoreBool = true
+	}
+
+	errCh := make(chan error, 2)
+	var wg sync.WaitGroup
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		if err := worker.Run(ctx, restoreBool, ticker, reader, writer, reader, writer); err != nil {
+			errCh <- err
+		}
+	}()
+	go func() {
+		if err := grpcServer.Serve(lis); err != nil {
+			errCh <- err
+		}
+	}()
+
+	select {
+	case <-ctx.Done():
+		grpcServer.GracefulStop()
+	case err := <-errCh:
+		return err
+	}
+
+	wg.Wait()
+	return nil
+}
+
+// runDBGRPC starts a gRPC server using PostgreSQL-based metric storage.
+func runDBGRPC(ctx context.Context, addr string) error {
+	dbConn, err := db.New("pgx", databaseDSN)
+	if err != nil {
+		return err
+	}
+	defer dbConn.Close()
+
+	if err := goose.Up(dbConn.DB, migrationsDir); err != nil {
+		return err
+	}
+
+	writer := dbRepo.NewMetricWriteRepository(dbConn)
+	reader := dbRepo.NewMetricReadRepository(dbConn)
+	service := services.NewMetricService(writer, reader)
+
+	metricWriteHandler := grpcHandlers.NewMetricWriteHandler(service)
+	metricReadHandler := grpcHandlers.NewMetricReadHandler(service, service)
+
+	grpcServer := grpc.NewServer()
+	pb.RegisterMetricWriteServiceServer(grpcServer, metricWriteHandler)
+	pb.RegisterMetricReadServiceServer(grpcServer, metricReadHandler)
+
+	lis, err := net.Listen("tcp", addr)
+	if err != nil {
+		return fmt.Errorf("failed to listen on %s: %w", addr, err)
+	}
+
+	errCh := make(chan error, 1)
+	go func() {
+		if err := grpcServer.Serve(lis); err != nil {
+			errCh <- err
+		}
+	}()
+
+	select {
+	case <-ctx.Done():
+		grpcServer.GracefulStop()
+		return nil
+	case err := <-errCh:
+		return err
+	}
+}
+
+// runDBWithWorkerGRPC starts a PostgreSQL-backed gRPC server with file-based persistence worker.
+func runDBWithWorkerGRPC(ctx context.Context, addr string) error {
+	dbConn, err := db.New("pgx", databaseDSN)
+	if err != nil {
+		return err
+	}
+	defer dbConn.Close()
+
+	if err := goose.Up(dbConn.DB, migrationsDir); err != nil {
+		return err
+	}
+
+	writer := dbRepo.NewMetricWriteRepository(dbConn)
+	reader := dbRepo.NewMetricReadRepository(dbConn)
+	service := services.NewMetricService(writer, reader)
+
+	writerFile := file.NewMetricWriteRepository(fileStoragePath)
+	readerFile := file.NewMetricReadRepository(fileStoragePath)
+
+	metricWriteHandler := grpcHandlers.NewMetricWriteHandler(service)
+	metricReadHandler := grpcHandlers.NewMetricReadHandler(service, service)
+
+	grpcServer := grpc.NewServer()
+	pb.RegisterMetricWriteServiceServer(grpcServer, metricWriteHandler)
+	pb.RegisterMetricReadServiceServer(grpcServer, metricReadHandler)
+
+	lis, err := net.Listen("tcp", addr)
+	if err != nil {
+		return fmt.Errorf("failed to listen on %s: %w", addr, err)
+	}
+
+	var ticker *time.Ticker
+	intervalSeconds, _ := strconv.Atoi(storeInterval)
+	if intervalSeconds > 0 {
+		ticker = time.NewTicker(time.Duration(intervalSeconds) * time.Second)
+		defer ticker.Stop()
+	}
+
+	var restoreBool bool
+	if restore == "true" {
+		restoreBool = true
+	}
+
+	errCh := make(chan error, 2)
+	var wg sync.WaitGroup
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		if err := worker.Run(ctx, restoreBool, ticker, reader, writer, readerFile, writerFile); err != nil {
+			errCh <- err
+		}
+	}()
+	go func() {
+		if err := grpcServer.Serve(lis); err != nil {
+			errCh <- err
+		}
+	}()
+
+	select {
+	case <-ctx.Done():
+		grpcServer.GracefulStop()
+	case err := <-errCh:
+		return err
+	}
+
+	wg.Wait()
+	return nil
 }
 
 // newDBPingHandler check db connection.

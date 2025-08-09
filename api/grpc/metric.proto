@@ -1,0 +1,61 @@
+syntax = "proto3";
+
+package metrics;
+
+option go_package = "github.com/sbilibin2017/gophmetrics/pkg/grpc";
+
+import "google/protobuf/empty.proto";
+import "google/protobuf/timestamp.proto";
+import "google/protobuf/wrappers.proto";
+
+// MetricID represents a metric identifier.
+message MetricID {
+  string id = 1;
+  string mtype = 2;
+}
+
+// Metrics represents a metric with associated data.
+message Metrics {
+  string id = 1;
+  string mtype = 2;
+
+  // Optional int64 delta for counters
+  google.protobuf.Int64Value delta = 3;
+
+  // Optional double value for gauges
+  google.protobuf.DoubleValue value = 4;
+
+  google.protobuf.Timestamp created_at = 5;
+  google.protobuf.Timestamp updated_at = 6;
+}
+
+// Request message for updating a metric.
+message UpdateMetricRequest {
+  Metrics metric = 1;
+}
+
+// Response message for update, returns updated metric.
+message UpdateMetricResponse {
+  Metrics metric = 1;
+}
+
+// Request message for getting a metric.
+message GetMetricRequest {
+  MetricID id = 1;
+}
+
+// Response message for listing all metrics.
+message ListMetricsResponse {
+  repeated Metrics metrics = 1;
+}
+
+// Service for reading metrics.
+service MetricReadService {
+  rpc Get(GetMetricRequest) returns (Metrics);
+  rpc List(google.protobuf.Empty) returns (ListMetricsResponse);
+}
+
+// Service for writing/updating metrics.
+service MetricWriteService {
+  rpc Update(UpdateMetricRequest) returns (UpdateMetricResponse);
+}
