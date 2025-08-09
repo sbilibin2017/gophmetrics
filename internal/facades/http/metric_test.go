@@ -1,123 +1,214 @@
 package http
 
 import (
-	"bytes"
-	"compress/gzip"
 	"context"
-	"crypto/hmac"
-	"crypto/sha256"
-	"encoding/hex"
-	"io"
+	"errors"
+	"net"
 	"net/http"
-	"net/http/httptest"
 	"testing"
+	"time"
 
 	"github.com/go-resty/resty/v2"
-	"github.com/stretchr/testify/assert"
-
+	"github.com/golang/mock/gomock"
 	"github.com/sbilibin2017/gophmetrics/internal/models"
+	"github.com/stretchr/testify/assert"
 )
 
-// helper to decompress gzip data
-func decompressGzip(data []byte) ([]byte, error) {
-	gr, err := gzip.NewReader(bytes.NewReader(data))
-	if err != nil {
-		return nil, err
-	}
-	defer gr.Close()
-	return io.ReadAll(gr)
+// mockRoundTripper simulates HTTP responses for resty client.
+type mockRoundTripper struct {
+	statusCode int
 }
 
-func TestMetricHTTPFacade_Update_Success(t *testing.T) {
-	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		assert.Equal(t, http.MethodPost, r.Method)
-		assert.Equal(t, "application/json", r.Header.Get("Content-Type"))
-		assert.Equal(t, "gzip", r.Header.Get("Content-Encoding"))
+func (m *mockRoundTripper) RoundTrip(req *http.Request) (*http.Response, error) {
+	return &http.Response{
+		StatusCode: m.statusCode,
+		Body:       http.NoBody,
+	}, nil
+}
 
-		bodyCompressed, err := io.ReadAll(r.Body)
-		assert.NoError(t, err)
+// badMetric forces JSON marshal error.
+type badMetric struct{}
 
-		bodyDecompressed, err := decompressGzip(bodyCompressed)
-		assert.NoError(t, err)
+func (b badMetric) MarshalJSON() ([]byte, error) {
+	return nil, errors.New("forced marshal error")
+}
 
-		assert.Contains(t, string(bodyDecompressed), "test_metric")
+func TestMetricHTTPFacade_Update(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	defer ctrl.Finish()
 
-		w.WriteHeader(http.StatusOK)
-	}))
-	defer ts.Close()
+	mockCompressor := NewMockCompressor(ctrl)
+	mockHasher := NewMockHasher(ctrl)
+	mockCryptor := NewMockCryptor(ctrl)
 
-	client := resty.New()
-	client.SetBaseURL(ts.URL)
-
-	facade := NewMetricHTTPFacade(client, "", "") // no key
-
+	delta := int64(10)
+	value := 123.456
 	metrics := []*models.Metrics{
-		{ID: "test_metric"},
+		{
+			ID:        "metric1",
+			MType:     "counter",
+			Delta:     &delta,
+			CreatedAt: time.Now(),
+			UpdatedAt: time.Now(),
+		},
+		{
+			ID:        "metric2",
+			MType:     "gauge",
+			Value:     &value,
+			CreatedAt: time.Now(),
+			UpdatedAt: time.Now(),
+		},
 	}
 
-	err := facade.Update(context.Background(), metrics)
-	assert.NoError(t, err)
+	tests := []struct {
+		name           string
+		compressErr    error
+		encryptErr     error
+		hashReturn     string
+		useHasher      bool
+		useCryptor     bool
+		httpStatusCode int
+		expectError    bool
+		metricsInput   interface{} // allows flexibility if needed
+	}{
+		{
+			name:           "success no encryption no hash",
+			useHasher:      false,
+			useCryptor:     false,
+			compressErr:    nil,
+			httpStatusCode: 200,
+			expectError:    false,
+			metricsInput:   metrics,
+		},
+		{
+			name:           "success with encryption and hash",
+			useHasher:      true,
+			useCryptor:     true,
+			compressErr:    nil,
+			encryptErr:     nil,
+			hashReturn:     "fakehash",
+			httpStatusCode: 200,
+			expectError:    false,
+			metricsInput:   metrics,
+		},
+		{
+			name:         "compress error",
+			compressErr:  errors.New("compress failed"),
+			expectError:  true,
+			metricsInput: metrics,
+		},
+		{
+			name:         "encrypt error",
+			useCryptor:   true,
+			compressErr:  nil,
+			encryptErr:   errors.New("encrypt failed"),
+			expectError:  true,
+			metricsInput: metrics,
+		},
+		{
+			name:           "http error response",
+			compressErr:    nil,
+			httpStatusCode: 500,
+			expectError:    true,
+			metricsInput:   metrics,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			client := resty.New()
+			client.SetTransport(&mockRoundTripper{statusCode: tt.httpStatusCode})
+
+			// Only expect Compress if this test case is NOT a marshal error test
+			// (marshal errors will be tested separately)
+			if tt.compressErr != nil {
+				mockCompressor.EXPECT().Compress(gomock.Any()).Return(nil, tt.compressErr).Times(1)
+			} else {
+				mockCompressor.EXPECT().Compress(gomock.Any()).Return([]byte("compressed"), nil).Times(1)
+			}
+
+			if tt.useCryptor && tt.compressErr == nil {
+				mockCryptor.EXPECT().Encrypt([]byte("compressed")).Return([]byte("encrypted"), tt.encryptErr).Times(1)
+			}
+
+			if tt.useHasher {
+				mockHasher.EXPECT().Hash(gomock.Any()).Return(tt.hashReturn).Times(1)
+			}
+
+			var hasher Hasher
+			if tt.useHasher {
+				hasher = mockHasher
+			}
+
+			var cryptor Cryptor
+			if tt.useCryptor {
+				cryptor = mockCryptor
+			}
+
+			facade := NewMetricHTTPFacade(
+				client,
+				mockCompressor,
+				hasher,
+				cryptor,
+				"key",      // dummy key
+				"X-Hash",   // header name for hash
+				"/update/", // endpoint
+			)
+
+			// Cast metricsInput to the expected type ([]*models.Metrics)
+			m, ok := tt.metricsInput.([]*models.Metrics)
+			if !ok {
+				t.Fatalf("invalid type for metricsInput")
+			}
+
+			err := facade.Update(context.Background(), m)
+			if tt.expectError {
+				assert.Error(t, err)
+			} else {
+				assert.NoError(t, err)
+			}
+		})
+	}
 }
 
-func TestMetricHTTPFacade_Update_SkipNilMetric(t *testing.T) {
-	client := resty.New()
-	facade := NewMetricHTTPFacade(client, "", "")
+func TestMetricHTTPFacade_Update_PostError(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	defer ctrl.Finish()
 
-	err := facade.Update(context.Background(), []*models.Metrics{nil})
-	assert.NoError(t, err)
-}
+	mockCompressor := NewMockCompressor(ctrl)
+	// Don't declare mockHasher if unused
+	// Don't declare mockCryptor if unused
 
-func TestCompressGzip_And_Decompress(t *testing.T) {
-	data := []byte("hello gzip")
-
-	compressed, err := compressGzip(data)
-	assert.NoError(t, err)
-	assert.NotEmpty(t, compressed)
-
-	decompressed, err := decompressGzip(compressed)
-	assert.NoError(t, err)
-	assert.Equal(t, data, decompressed)
-}
-
-func TestMetricHTTPFacade_Update_WithHash(t *testing.T) {
-	const key = "testkey123"
-	const headerName = "HashSHA256"
-
-	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		assert.Equal(t, http.MethodPost, r.Method)
-		assert.Equal(t, "application/json", r.Header.Get("Content-Type"))
-		assert.Equal(t, "gzip", r.Header.Get("Content-Encoding"))
-
-		bodyCompressed, err := io.ReadAll(r.Body)
-		assert.NoError(t, err)
-
-		bodyDecompressed, err := decompressGzip(bodyCompressed)
-		assert.NoError(t, err)
-
-		receivedHash := r.Header.Get(headerName)
-		assert.NotEmpty(t, receivedHash)
-
-		// Correct HMAC-SHA256 with key on the original (decompressed) body
-		mac := hmac.New(sha256.New, []byte(key))
-		mac.Write(bodyDecompressed)
-		expectedHash := hex.EncodeToString(mac.Sum(nil))
-
-		assert.Equal(t, expectedHash, receivedHash)
-
-		w.WriteHeader(http.StatusOK)
-	}))
-	defer ts.Close()
-
-	client := resty.New()
-	client.SetBaseURL(ts.URL)
-
-	// Pass the header name here (previously was empty string)
-	facade := NewMetricHTTPFacade(client, key, headerName)
-
+	delta := int64(10)
 	metrics := []*models.Metrics{
-		{ID: "test_metric"},
+		{
+			ID:    "metric1",
+			MType: "counter",
+			Delta: &delta,
+		},
 	}
 
-	err := facade.Update(context.Background(), metrics)
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
 	assert.NoError(t, err)
+
+	// Immediately close to cause connection refused
+	ln.Close()
+
+	client := resty.New()
+	client.SetBaseURL("http://" + ln.Addr().String()) // broken server address
+
+	mockCompressor.EXPECT().Compress(gomock.Any()).Return([]byte("compressed"), nil).Times(1)
+
+	facade := NewMetricHTTPFacade(
+		client,
+		mockCompressor,
+		nil, // no hasher
+		nil, // no cryptor
+		"",
+		"",
+		"/update",
+	)
+
+	err = facade.Update(context.Background(), metrics)
+	assert.Error(t, err)
 }

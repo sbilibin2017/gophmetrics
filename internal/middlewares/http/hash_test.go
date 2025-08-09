@@ -2,133 +2,109 @@ package http
 
 import (
 	"bytes"
-	"crypto/hmac"
-	"crypto/sha256"
-	"encoding/hex"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"testing"
 
-	"github.com/stretchr/testify/assert"
+	"github.com/golang/mock/gomock"
+	"github.com/stretchr/testify/require"
 )
 
-// helper to compute HMAC-SHA256 hash
-func computeHMAC(data []byte, key string) string {
-	mac := hmac.New(sha256.New, []byte(key))
-	mac.Write(data)
-	return hex.EncodeToString(mac.Sum(nil))
-}
+func TestHashMiddleware(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	defer ctrl.Finish()
 
-func TestHashMiddleware_ValidRequestAndResponseHash(t *testing.T) {
-	key := "mysecretkey"
-	header := "HashSHA256"
-	body := []byte(`{"valid":"json"}`)
-	hash := computeHMAC(body, key)
+	mockHasher := NewMockHasher(ctrl)
 
-	req := httptest.NewRequest(http.MethodPost, "/", bytes.NewReader(body))
-	req.Header.Set(header, hash)
+	const header = "X-Hash"
 
-	rr := httptest.NewRecorder()
+	testBody := []byte("test body")
+	testHash := "hash_of_test_body"
+	responseBody := []byte("response body")
+	responseHash := "hash_of_response_body"
 
+	// Middleware with hasher
+	middleware := HashMiddleware(mockHasher, header)
+
+	// Handler echoes "response body"
 	handler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		_, _ = w.Write([]byte(`response-ok`))
+		w.Write(responseBody)
 	})
 
-	HashMiddleware(key, header)(handler).ServeHTTP(rr, req)
+	t.Run("no hasher - calls next directly", func(t *testing.T) {
+		mw := HashMiddleware(nil, header)
+		rec := httptest.NewRecorder()
 
-	assert.Equal(t, http.StatusOK, rr.Code)
-	assert.Equal(t, "response-ok", rr.Body.String())
+		req := httptest.NewRequest("POST", "/", bytes.NewReader(testBody))
+		req.Header.Set(header, testHash)
 
-	expectedRespHash := computeHMAC([]byte("response-ok"), key)
-	assert.Equal(t, expectedRespHash, rr.Header().Get(header))
-}
+		mw(handler).ServeHTTP(rec, req)
 
-func TestHashMiddleware_InvalidRequestHash(t *testing.T) {
-	key := "mysecretkey"
-	header := "HashSHA256"
-	body := []byte(`{"invalid":"hash"}`)
-
-	req := httptest.NewRequest(http.MethodPost, "/", bytes.NewReader(body))
-	req.Header.Set(header, "wronghashvalue")
-
-	rr := httptest.NewRecorder()
-
-	called := false
-	handler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		called = true
+		require.Equal(t, http.StatusOK, rec.Code)
+		require.Equal(t, string(responseBody), rec.Body.String())
 	})
 
-	HashMiddleware(key, header)(handler).ServeHTTP(rr, req)
+	t.Run("valid hash in request - calls hasher.Hash for request and response", func(t *testing.T) {
+		mockHasher.EXPECT().Hash(testBody).Return(testHash).Times(1)
+		mockHasher.EXPECT().Hash(responseBody).Return(responseHash).Times(1)
 
-	assert.False(t, called, "handler should not be called with invalid hash")
-	assert.Equal(t, http.StatusBadRequest, rr.Code)
-}
+		rec := httptest.NewRecorder()
+		req := httptest.NewRequest("POST", "/", bytes.NewReader(testBody))
+		req.Header.Set(header, testHash)
 
-func TestHashMiddleware_MissingHashHeader(t *testing.T) {
-	key := "mysecretkey"
-	header := "HashSHA256"
-	body := []byte(`{"no":"hash"}`)
+		middleware(handler).ServeHTTP(rec, req)
 
-	req := httptest.NewRequest(http.MethodPost, "/", bytes.NewReader(body))
-	rr := httptest.NewRecorder()
-
-	handler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		_, _ = w.Write([]byte("ok-missing-hash"))
+		require.Equal(t, http.StatusOK, rec.Code)
+		require.Equal(t, responseBody, rec.Body.Bytes())
+		require.Equal(t, responseHash, rec.Header().Get(header))
 	})
 
-	HashMiddleware(key, header)(handler).ServeHTTP(rr, req)
+	t.Run("no hash in request header - skips request hash validation, computes response hash", func(t *testing.T) {
+		mockHasher.EXPECT().Hash(responseBody).Return(responseHash).Times(1)
 
-	assert.Equal(t, http.StatusOK, rr.Code)
-	assert.Equal(t, "ok-missing-hash", rr.Body.String())
+		rec := httptest.NewRecorder()
+		req := httptest.NewRequest("POST", "/", bytes.NewReader(testBody))
+		// no header set
 
-	expected := computeHMAC([]byte("ok-missing-hash"), key)
-	assert.Equal(t, expected, rr.Header().Get(header))
-}
+		middleware(handler).ServeHTTP(rec, req)
 
-func TestHashMiddleware_EmptyKey_SkipsMiddleware(t *testing.T) {
-	header := "HashSHA256"
-	body := []byte(`{"skip":"middleware"}`)
-
-	req := httptest.NewRequest(http.MethodPost, "/", bytes.NewReader(body))
-	rr := httptest.NewRecorder()
-
-	called := false
-	handler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		called = true
-		_, _ = w.Write([]byte("skipped"))
+		require.Equal(t, http.StatusOK, rec.Code)
+		require.Equal(t, responseBody, rec.Body.Bytes())
+		require.Equal(t, responseHash, rec.Header().Get(header))
 	})
 
-	HashMiddleware("", header)(handler).ServeHTTP(rr, req)
+	t.Run("invalid hash in request - returns 400", func(t *testing.T) {
+		mockHasher.EXPECT().Hash(testBody).Return(testHash).Times(1)
 
-	assert.True(t, called)
-	assert.Equal(t, http.StatusOK, rr.Code)
-	assert.Equal(t, "skipped", rr.Body.String())
-	assert.Empty(t, rr.Header().Get(header))
-}
+		rec := httptest.NewRecorder()
+		req := httptest.NewRequest("POST", "/", bytes.NewReader(testBody))
+		req.Header.Set(header, "invalidhash")
 
-func TestHashMiddleware_BrokenBody(t *testing.T) {
-	key := "mysecretkey"
-	header := "HashSHA256"
+		middleware(handler).ServeHTTP(rec, req)
 
-	req := httptest.NewRequest(http.MethodPost, "/", brokenReader{})
-	rr := httptest.NewRecorder()
-
-	handler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		t.Fatal("handler should not be called when body is unreadable")
+		require.Equal(t, http.StatusBadRequest, rec.Code)
 	})
 
-	HashMiddleware(key, header)(handler).ServeHTTP(rr, req)
+	t.Run("error reading body - returns 400", func(t *testing.T) {
+		// Create a request with a broken Body that always errors
+		brokenBody := &errorReader{}
+		req := httptest.NewRequest("POST", "/", brokenBody)
+		rec := httptest.NewRecorder()
 
-	assert.Equal(t, http.StatusBadRequest, rr.Code)
+		middleware(handler).ServeHTTP(rec, req)
+
+		require.Equal(t, http.StatusBadRequest, rec.Code)
+	})
 }
 
-// brokenReader always returns error when read
-type brokenReader struct{}
+// errorReader simulates a Read error for testing.
+type errorReader struct{}
 
-func (brokenReader) Read(p []byte) (n int, err error) {
-	return 0, assert.AnError
+func (e *errorReader) Read([]byte) (int, error) {
+	return 0, io.ErrUnexpectedEOF
 }
 
-func (brokenReader) Close() error {
+func (e *errorReader) Close() error {
 	return nil
 }

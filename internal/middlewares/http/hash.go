@@ -2,19 +2,34 @@ package http
 
 import (
 	"bytes"
-	"crypto/hmac"
-	"crypto/sha256"
-	"encoding/hex"
 	"io"
 	"net/http"
 )
 
-// NewHashMiddleware creates a middleware handler that verifies request body HMAC SHA256
-// and adds response body HMAC SHA256 in the configured header.
-// If the key is empty, the middleware skips all processing.
-func HashMiddleware(key, header string) func(http.Handler) http.Handler {
+// Hasher is an interface defining a hashing algorithm.
+// It accepts a byte slice and returns the hash as a string.
+type Hasher interface {
+	Hash(data []byte) string
+}
+
+// HashMiddleware returns an HTTP middleware that verifies the request body hash
+// against the hash provided in the specified request header. It also computes
+// a hash of the response body and adds it to the same header in the response.
+//
+// If the provided hasher is nil, the middleware performs no processing and simply
+// calls the next handler.
+//
+// Parameters:
+//   - hasher: an implementation of the Hasher interface used to compute hashes.
+//   - header: the HTTP header name where the hash is expected in the request and set in the response.
+//
+// Behavior:
+//   - Reads the entire request body to verify its hash if the header is present.
+//   - Buffers the response body to compute its hash before sending it to the client.
+//   - Sets the computed hash in the configured header of the response.
+func HashMiddleware(hasher Hasher, header string) func(http.Handler) http.Handler {
 	return func(next http.Handler) http.Handler {
-		if key == "" {
+		if hasher == nil {
 			return next
 		}
 
@@ -29,8 +44,8 @@ func HashMiddleware(key, header string) func(http.Handler) http.Handler {
 
 			receivedHash := r.Header.Get(header)
 			if receivedHash != "" {
-				expectedHash := computeHash(key, bodyBytes)
-				if !hmac.Equal([]byte(receivedHash), []byte(expectedHash)) {
+				expectedHash := hasher.Hash(bodyBytes)
+				if expectedHash != receivedHash {
 					w.WriteHeader(http.StatusBadRequest)
 					return
 				}
@@ -44,7 +59,7 @@ func HashMiddleware(key, header string) func(http.Handler) http.Handler {
 			next.ServeHTTP(rw, r)
 
 			responseBody := rw.buf.Bytes()
-			respHash := computeHash(key, responseBody)
+			respHash := hasher.Hash(responseBody)
 
 			w.Header().Set(header, respHash)
 			w.Write(responseBody)
@@ -52,23 +67,16 @@ func HashMiddleware(key, header string) func(http.Handler) http.Handler {
 	}
 }
 
-// responseWriterWithHash captures the response body for hash calculation.
+// responseWriterWithHash wraps http.ResponseWriter to capture the response body
+// data in a buffer for the purpose of hashing before sending the data to the client.
 type responseWriterWithHash struct {
 	http.ResponseWriter
 	buf *bytes.Buffer
 }
 
+// Write buffers the data into an internal buffer instead of writing it directly
+// to the underlying ResponseWriter. This allows capturing the full response body
+// to compute the hash before sending.
 func (w *responseWriterWithHash) Write(b []byte) (int, error) {
 	return w.buf.Write(b)
-}
-
-// computeHash computes the HMAC SHA256 hash of data using the provided key,
-// returning the hex-encoded string. If key is empty, returns an empty string.
-func computeHash(key string, data []byte) string {
-	if key == "" {
-		return ""
-	}
-	mac := hmac.New(sha256.New, []byte(key))
-	mac.Write(data)
-	return hex.EncodeToString(mac.Sum(nil))
 }
