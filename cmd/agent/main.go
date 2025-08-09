@@ -18,8 +18,11 @@ import (
 	"github.com/sbilibin2017/gophmetrics/internal/configs/compressor"
 	"github.com/sbilibin2017/gophmetrics/internal/configs/cryptor"
 	"github.com/sbilibin2017/gophmetrics/internal/configs/hasher"
+	grpcClient "github.com/sbilibin2017/gophmetrics/internal/configs/transport/grpc"
 	httpClient "github.com/sbilibin2017/gophmetrics/internal/configs/transport/http"
+	grpcFacades "github.com/sbilibin2017/gophmetrics/internal/facades/grpc"
 	httpFacades "github.com/sbilibin2017/gophmetrics/internal/facades/http"
+	pb "github.com/sbilibin2017/gophmetrics/pkg/grpc"
 	"github.com/spf13/pflag"
 )
 
@@ -179,10 +182,8 @@ func run(ctx context.Context) error {
 	switch parsedAddr.Scheme {
 	case address.SchemeHTTP:
 		return runHTTP(ctx)
-	case address.SchemeHTTPS:
-		return fmt.Errorf("https agent not implemented yet: %s", parsedAddr.Address)
 	case address.SchemeGRPC:
-		return fmt.Errorf("gRPC agent not implemented yet: %s", parsedAddr.Address)
+		return runGRPC(ctx)
 	default:
 		return address.ErrUnsupportedScheme
 	}
@@ -236,6 +237,45 @@ func runHTTP(ctx context.Context) error {
 
 	// Create the MetricHTTPFacade that adds X-Real-IP header with agentIP
 	updater := httpFacades.NewMetricHTTPFacade(client, c, h, cr, key, keyHeader, endpoint, agentIP)
+
+	pollTicker := time.NewTicker(time.Duration(pollInt) * time.Second)
+	defer pollTicker.Stop()
+
+	reportTicker := time.NewTicker(time.Duration(reportInt) * time.Second)
+	defer reportTicker.Stop()
+
+	// Listen for system interrupt signals for graceful shutdown
+	ctx, stop := signal.NotifyContext(ctx, os.Interrupt, syscall.SIGTERM, syscall.SIGINT)
+	defer stop()
+
+	return agent.Run(ctx, updater, pollTicker, reportTicker, limitInt)
+}
+
+// runGRPC runs the agent in GRPC mode.
+func runGRPC(ctx context.Context) error {
+	pollInt, _ := strconv.Atoi(pollInterval)
+	reportInt, _ := strconv.Atoi(reportInterval)
+	limitInt, _ := strconv.Atoi(limit)
+
+	// Setup gRPC client connection with retry policy
+	conn, err := grpcClient.New(
+		addr,
+		grpcClient.WithRetryPolicy(
+			grpcClient.RetryPolicy{
+				Count:   3,
+				Wait:    500 * time.Millisecond,
+				MaxWait: 5 * time.Second,
+			},
+		),
+	)
+	if err != nil {
+		return fmt.Errorf("failed to create grpc connection: %w", err)
+	}
+	defer conn.Close()
+
+	// Create the gRPC client facade
+	client := pb.NewMetricWriteServiceClient(conn)
+	updater := grpcFacades.NewMetricGRPCFacade(client)
 
 	pollTicker := time.NewTicker(time.Duration(pollInt) * time.Second)
 	defer pollTicker.Stop()
