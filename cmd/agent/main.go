@@ -14,6 +14,9 @@ import (
 
 	"github.com/sbilibin2017/gophmetrics/internal/agent"
 	"github.com/sbilibin2017/gophmetrics/internal/configs/address"
+	"github.com/sbilibin2017/gophmetrics/internal/configs/compressor"
+	"github.com/sbilibin2017/gophmetrics/internal/configs/cryptor"
+	"github.com/sbilibin2017/gophmetrics/internal/configs/hasher"
 	httpClient "github.com/sbilibin2017/gophmetrics/internal/configs/transport/http"
 	httpFacades "github.com/sbilibin2017/gophmetrics/internal/facades/http"
 	"github.com/spf13/pflag"
@@ -52,28 +55,26 @@ func printBuildInfo() {
 	fmt.Printf("Build commit: %s\n", buildCommit)
 }
 
-// Application flags and configuration variables.
 var (
-	addr           string                // Server URL address
-	pollInterval   int                   // Poll interval in seconds
-	reportInterval int                   // Report interval in seconds
-	key            string                // Key for SHA256 hashing
-	keyHeader      string = "HashSHA256" // HTTP header name containing the hash
-	limit          int                   // Max number of concurrent outbound requests
+	addr           string
+	pollInterval   int
+	reportInterval int
+	key            string
+	keyHeader      string = "HashSHA256"
+	limit          int
+	cryptoKeyPath  string
+	endpoint       string = "/updates/"
 )
 
-// init initializes CLI flags with default values.
 func init() {
 	pflag.StringVarP(&addr, "address", "a", "http://localhost:8080", "server URL")
 	pflag.IntVarP(&pollInterval, "poll-interval", "p", 2, "poll interval in seconds")
 	pflag.IntVarP(&reportInterval, "report-interval", "r", 10, "report interval in seconds")
 	pflag.StringVarP(&key, "key", "k", "", "key for SHA256 hashing")
 	pflag.IntVarP(&limit, "limit", "l", 5, "max number of concurrent outbound requests")
+	pflag.StringVar(&cryptoKeyPath, "crypto-key", "c", "path to PEM file with public key")
 }
 
-// parseFlags parses CLI flags and environment variables.
-// Environment variables override flags if set.
-// Supported environment variables: ADDRESS, POLL_INTERVAL, REPORT_INTERVAL, KEY, RATE_LIMIT.
 func parseFlags() error {
 	pflag.Parse()
 
@@ -111,13 +112,13 @@ func parseFlags() error {
 		}
 		limit = i
 	}
+	if env := os.Getenv("CRYPTO_KEY"); env != "" {
+		cryptoKeyPath = env
+	}
 
 	return nil
 }
 
-// run determines which transport scheme to use (HTTP, HTTPS, gRPC),
-// then starts the agent accordingly.
-// Currently, only HTTP is implemented.
 func run(ctx context.Context) error {
 	parsedAddr := address.New(addr)
 	switch parsedAddr.Scheme {
@@ -132,10 +133,6 @@ func run(ctx context.Context) error {
 	}
 }
 
-// runHTTP starts the agent using HTTP transport.
-// It initializes the HTTP client with retry policy,
-// sets up poll and report tickers, handles graceful shutdown,
-// and calls agent.Run to start polling and reporting metrics.
 func runHTTP(ctx context.Context) error {
 	client := httpClient.New(
 		addr,
@@ -148,7 +145,23 @@ func runHTTP(ctx context.Context) error {
 		),
 	)
 
-	updater := httpFacades.NewMetricHTTPFacade(client, key, keyHeader)
+	var h *hasher.Hasher
+	if key != "" {
+		h = hasher.New(key)
+	}
+
+	c := compressor.NewCompressor()
+
+	var cr *cryptor.Cryptor
+	var err error
+	if cryptoKeyPath != "" {
+		cr, err = cryptor.New(cryptor.WithPublicKeyPath(cryptoKeyPath))
+		if err != nil {
+			return fmt.Errorf("failed to load public key for cryptor: %w", err)
+		}
+	}
+
+	updater := httpFacades.NewMetricHTTPFacade(client, c, h, cr, key, keyHeader, endpoint)
 
 	pollTicker := time.NewTicker(time.Duration(pollInterval) * time.Second)
 	defer pollTicker.Stop()

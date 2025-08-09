@@ -17,6 +17,7 @@ import (
 	"github.com/pressly/goose"
 	"github.com/sbilibin2017/gophmetrics/internal/configs/address"
 	"github.com/sbilibin2017/gophmetrics/internal/configs/db"
+	"github.com/sbilibin2017/gophmetrics/internal/configs/hasher"
 	"github.com/sbilibin2017/gophmetrics/internal/models"
 	"github.com/sbilibin2017/gophmetrics/internal/repositories/file"
 	"github.com/sbilibin2017/gophmetrics/internal/repositories/memory"
@@ -46,12 +47,9 @@ func main() {
 // Build information variables.
 // These are set during build time via ldflags.
 var (
-	// buildVersion holds the build version of the application.
 	buildVersion string = "N/A"
-	// buildDate holds the build date of the application.
-	buildDate string = "N/A"
-	// buildCommit holds the git commit hash of the build.
-	buildCommit string = "N/A"
+	buildDate    string = "N/A"
+	buildCommit  string = "N/A"
 )
 
 // printBuildInfo prints the build version, date, and commit hash to stdout.
@@ -70,6 +68,7 @@ var (
 	migrationsDir   string = "migrations"
 	key             string
 	keyHeader       string = "HashSHA256"
+	cryptoKeyPath   string
 )
 
 // init sets up command-line flags.
@@ -80,6 +79,7 @@ func init() {
 	pflag.BoolVarP(&restore, "restore", "r", true, "restore metrics from file on startup")
 	pflag.StringVarP(&databaseDSN, "database-dsn", "d", "", "PostgreSQL DSN connection string")
 	pflag.StringVarP(&key, "key", "k", "", "key for SHA256 hashing")
+	pflag.StringVar(&cryptoKeyPath, "crypto-key", "c", "path to file with private key for hashing")
 }
 
 // parseFlags parses CLI flags and environment variables.
@@ -90,6 +90,7 @@ func parseFlags() error {
 		return errors.New("unknown flags or arguments are provided")
 	}
 
+	// Читаем из окружения (env) с приоритетом ниже чем флаги
 	if env := os.Getenv("ADDRESS"); env != "" {
 		addr = env
 	}
@@ -119,6 +120,11 @@ func parseFlags() error {
 	if env := os.Getenv("KEY"); env != "" {
 		key = env
 	}
+
+	if env := os.Getenv("CRYPTO_KEY"); env != "" {
+		cryptoKeyPath = env
+	}
+
 	return nil
 }
 
@@ -149,10 +155,12 @@ func runMemoryHTTP(ctx context.Context, addr string, key string) error {
 	reader := memory.NewMetricReadRepository(data)
 	service := services.NewMetricService(writer, reader)
 
+	hasher := hasher.New(key)
+
 	r := chi.NewRouter()
 	r.Use(httpMiddlewares.LoggingMiddleware)
 	r.Use(httpMiddlewares.GzipMiddleware)
-	r.Use(httpMiddlewares.HashMiddleware(key, keyHeader))
+	r.Use(httpMiddlewares.HashMiddleware(hasher, keyHeader))
 
 	r.Post("/update/{type}/{name}/{value}", httpHandlers.NewMetricUpdatePathHandler(service))
 	r.Post("/update/", httpHandlers.NewMetricUpdateBodyHandler(service))
@@ -186,10 +194,12 @@ func runFileHTTP(ctx context.Context, addr string, storeInterval int, filePath s
 	reader := file.NewMetricReadRepository(filePath)
 	service := services.NewMetricService(writer, reader)
 
+	hasher := hasher.New(key)
+
 	r := chi.NewRouter()
 	r.Use(httpMiddlewares.LoggingMiddleware)
 	r.Use(httpMiddlewares.GzipMiddleware)
-	r.Use(httpMiddlewares.HashMiddleware(key, keyHeader))
+	r.Use(httpMiddlewares.HashMiddleware(hasher, keyHeader))
 
 	r.Post("/update/{type}/{name}/{value}", httpHandlers.NewMetricUpdatePathHandler(service))
 	r.Post("/update/", httpHandlers.NewMetricUpdateBodyHandler(service))
@@ -249,10 +259,12 @@ func runDBHTTP(ctx context.Context, addr, dsn, migrationsDir, key string) error 
 	reader := dbRepo.NewMetricReadRepository(dbConn)
 	service := services.NewMetricService(writer, reader)
 
+	hasher := hasher.New(key)
+
 	r := chi.NewRouter()
 	r.Use(httpMiddlewares.LoggingMiddleware)
 	r.Use(httpMiddlewares.GzipMiddleware)
-	r.Use(httpMiddlewares.HashMiddleware(key, keyHeader))
+	r.Use(httpMiddlewares.HashMiddleware(hasher, keyHeader))
 
 	r.Post("/update/{type}/{name}/{value}", httpHandlers.NewMetricUpdatePathHandler(service))
 	r.Post("/update/", httpHandlers.NewMetricUpdateBodyHandler(service))
@@ -300,10 +312,12 @@ func runDBWithWorkerHTTP(ctx context.Context, addr string, storeInterval int, fi
 	writerFile := file.NewMetricWriteRepository(filePath)
 	readerFile := file.NewMetricReadRepository(filePath)
 
+	hasher := hasher.New(key)
+
 	r := chi.NewRouter()
 	r.Use(httpMiddlewares.LoggingMiddleware)
 	r.Use(httpMiddlewares.GzipMiddleware)
-	r.Use(httpMiddlewares.HashMiddleware(key, keyHeader))
+	r.Use(httpMiddlewares.HashMiddleware(hasher, keyHeader))
 
 	r.Post("/update/{type}/{name}/{value}", httpHandlers.NewMetricUpdatePathHandler(service))
 	r.Post("/update/", httpHandlers.NewMetricUpdateBodyHandler(service))
