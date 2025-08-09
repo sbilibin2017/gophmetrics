@@ -28,7 +28,7 @@ func New(target string, opts ...Opt) (*grpc.ClientConn, error) {
 		}
 	}
 
-	conn, err := grpc.Dial(target, dialOpts...)
+	conn, err := grpc.NewClient(target, dialOpts...)
 	if err != nil {
 		return nil, err
 	}
